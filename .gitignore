@@ -1,0 +1,9 @@
+.env
+cache/
+output/
+output_archived/
+config_local.py
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

@@ -1,0 +1,31 @@
+DATASET ATTRIBUTION AND LICENSING
+
+This software includes pre-processed snippets of the defined environmental rasters in the models dataset. 
+These rasters are distributed under open licenses that allow redistribution with attribution.
+
+1. LandScan HD (Oak Ridge National Laboratory)
+   Being served under Creative Commons Attribution 4.0 International (CC BY 4.0) license.
+   This work utilizes the LandScan HD dataset (2022) provided by Oak Ridge National Laboratory.
+
+2. Global Human Settlement Layer
+   Primary source of the data is European Commission, Joint Research Centre shared under CC BY 4.0 license.
+   Schiavina M., Melchiorri M., Pesaresi M. (2022): GHSL Data Package 2022.
+
+3. Copernicus DEM
+   Data provided thanks to European Space Agency and shared under Copernicus WorldDEM-30 license.
+   © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.
+
+4. Copernicus Land Monitoring Service
+   Data by European Environment Agency with full, free and open access.
+   Datasets used:
+     - CORINE Land Cover 2018
+     - High Resolution Layer: Tree Cover Density 2021
+     - Water Bodies 2020 (300m)
+   Data produced thanks to Copernicus data and information funded by the European Union - EU-Copernicus program.
+
+5. ECOSTRESS Land Surface Temperature
+   Provider of the data is NASA / JPL-Caltech. License is NASA Open Data Policy.
+   Data provided by NASA/JPL ECOSTRESS mission.
+
+Users of HRMTA must retain this attribution file when redistributing the 
+environmental dataset.
