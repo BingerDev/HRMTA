@@ -112,7 +112,7 @@ While the model has been made to overcome frequent challenges with traditional i
 - Due to the architecture of the model, Kriging is still likely to outperform HRMTA in point-to-point accuracy, primarily during stable temperature conditions. This is because HRMTA architecture prioritizes physical realism over mathematical perfectionism. HRMTA is designed to specifically create a physically accurate temperature field. While simple interpolation models like Kriging or IDW are simply connecting the station readings to extract the most likely temperature value for a given point, HRMTA integrates actual physics into the model and forces it to interpolate a temperature field that makes physical sense.
 - There are highest grid resolution constraints for this specific version of the model. Because the model is being trained on the extent of the entire Poland, the input environmental data is really coarse and has a limited resolution. If you try to interpolate at a grid resolution higher than the absolute highest effective resolution (which is around 1 km), not only the model runtime will skyrocket and get unsuitable for operational usage, but also the model is not going to produce any new data and unexpected behavior is almost guaranteed, resulting in severe model performance degradation.
 - The model pipeline is overly dependent on the exact structure of observational data. If anything changes, the model data extraction from this specific data source will fail. However, this is already being handled in the model - if one data source fails to fetch, the model will still run with other available data sources.
-- Due to how automatic geocoding for the station data is being handled in the code, it introduces some level of uncertainty directly into the model, which is one of the main sources of error in the model.
+- Some of the data sources provide only names of the places at which stations are located but does not provide precise coordinates. This introduces a layer of uncertainty into the model, which is currently one of the main sources of error in the model.
 - The model is diagnostic and intended primarily for interpolation of the current temperature field. It is not a weather forecasting tool.
 - Some of the pipeline and the entire model's environmental and observational datasets have been optimized specifically and strictly for the extent of Poland. Changing the country of interpolation is currently pretty challenging and is manual. It requires deep knowledge of the topic and is time-consuming.
 - Because of the model aggregating data from different sources with varying refresh rates, there could be some issues during rapidly moving cold fronts or other rapidly progressing phenomena. It is likely that the model interpolation may sometimes slightly lag compared to the actual observations in such conditions.
@@ -141,6 +141,10 @@ The main advantage of HRMTA is that it excels at physical realism and robustness
 **Is it possible to interpolate temperature data beyond Poland using this model?**
 
 No, at least not yet. There are plans to automatically include more pre-built datasets for more European countries, but these are more long-term plans. Currently. we are focusing on Poland to explore different technologies before moving to a wider coverage.
+
+**Can I run the model only for specific region of Poland?**
+
+No, it is currently not possible. This is planned for future versions of the model.
 
 **Is there a way to switch between smoothed and gridded output?**
 
