@@ -188,7 +188,7 @@ def plot_temperature_map(
     # Title aligned left
     resolution_km_display = resolution_km / 1000
     ax.set_title(
-        f'Polska • Temperatura powietrza 2 m • {resolution_km_display:.0f} km\n{utc_now}',
+        f'Polska • Temperatura powietrza 2 m • {resolution_km_display:g} km\n{utc_now}',
         loc='left', pad=10, fontsize=12, weight='bold'
     )
     
