@@ -67,7 +67,7 @@ GRID_RESOLUTION = 5000  # meters
 # Spatial CV
 TEST_SIZE = 0.15
 VAL_SIZE = 0.15
-RANDOM_STATE = 42
+RANDOM_STATE = 6
 SPATIAL_BUFFER_KM = 20
 
 # Architecture: Robust spatial-physics stacking
@@ -78,7 +78,7 @@ TREND_FEATURES = ['dem', 'y_pl', 'x_pl'] # Elevation + Latitude + Longitude
 # Ensemble settings
 USE_ENSEMBLE = True
 ENSEMBLE_N_MODELS = 5
-ENSEMBLE_SEEDS = [42, 123, 456, 789, 101112]
+ENSEMBLE_SEEDS = [6, 106, 206, 306, 406]
 
 # Stage 2: LightGBM
 LIGHTGBM_PARAMS = {
