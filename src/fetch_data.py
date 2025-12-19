@@ -31,14 +31,27 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     all_data = []
 
     session = requests.Session()
-    adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504]))
+    
+    retries = Retry(
+        total=3, 
+        backoff_factor=2, 
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    
     session.mount("https://", adapter)
-    session.headers.update({"User-Agent": "HRMTA-Bot/1.0 (+https://github.com/BingerDev/HRMTA)"})
+    session.mount("http://", adapter)
+    
+    session.headers.update({
+        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        'Accept': 'application/json',
+        'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8'
+    })
     
     for prov in provinces:
         try:
-            time.sleep(0.1)
-            response = session.get(IMGW_URL.format(prov=prov), timeout=20)
+            time.sleep(1)
+            response = session.get(IMGW_URL.format(prov=prov), timeout=30)
             response.raise_for_status()
             data = response.json()
             all_data.extend(data)
