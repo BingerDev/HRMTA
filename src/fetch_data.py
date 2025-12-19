@@ -5,6 +5,7 @@ import re
 import json
 from typing import List, Tuple
 import requests
+import time
 import pandas as pd
 from bs4 import BeautifulSoup
 
@@ -17,23 +18,6 @@ from urllib3.util.retry import Retry
 # IMGW
 IMGW_URL = "https://rafalraczynski.com.pl/imgw/dane-imgw/getJSON.php?type=table&province={prov}&sort=temp&order=asc"
 
-def get_session():
-    """Create a requests session with retries and timeout."""
-    session = requests.Session()
-    retry = Retry(
-        total=5, 
-        backoff_factor=1, 
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    })
-    return session
-
 def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     """
     Fetch IMGW data for specified regions
@@ -45,12 +29,16 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
         provinces = IMGW_PROVINCES
     
     all_data = []
-    session = get_session()
+
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504]))
+    session.mount("https://", adapter)
+    session.headers.update({"User-Agent": "HRMTA-Bot/1.0 (+https://github.com/BingerDev/HRMTA)"})
     
     for prov in provinces:
         try:
             time.sleep(0.1)
-            response = session.get(IMGW_URL.format(prov=prov), timeout=30)
+            response = session.get(IMGW_URL.format(prov=prov), timeout=20)
             response.raise_for_status()
             data = response.json()
             all_data.extend(data)
