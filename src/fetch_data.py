@@ -11,8 +11,28 @@ from bs4 import BeautifulSoup
 from .config import IMGW_PROVINCES, IMGW_DATA_MODE, TRAX_REGION_IDS, NETATMO_CONFIG
 from .utils import is_in_poland, clean_temperature
 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 # IMGW
 IMGW_URL = "https://rafalraczynski.com.pl/imgw/dane-imgw/getJSON.php?type=table&province={prov}&sort=temp&order=asc"
+
+def get_session():
+    """Create a requests session with retries and timeout."""
+    session = requests.Session()
+    retry = Retry(
+        total=5, 
+        backoff_factor=1, 
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    })
+    return session
 
 def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     """
@@ -25,9 +45,12 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
         provinces = IMGW_PROVINCES
     
     all_data = []
+    session = get_session()
+    
     for prov in provinces:
         try:
-            response = requests.get(IMGW_URL.format(prov=prov), timeout=30)
+            time.sleep(0.1)
+            response = session.get(IMGW_URL.format(prov=prov), timeout=30)
             response.raise_for_status()
             data = response.json()
             all_data.extend(data)
