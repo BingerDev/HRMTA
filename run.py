@@ -18,7 +18,7 @@ import gc
 from src.config import (
     GRID_RESOLUTION, CRS_POLAND, CRS_WGS84,
     TEST_SIZE, VAL_SIZE, RANDOM_STATE,
-    OUTPUT_DIR, SPATIAL_BUFFER_KM,
+    OUTPUT_DIR, RUN_OUTPUT_DIR, SPATIAL_BUFFER_KM,
     USE_ENSEMBLE, ENSEMBLE_N_MODELS, ENSEMBLE_SEEDS,
     TREND_FEATURES, LIGHTGBM_PARAMS, OUTPUT_PLOT, OUTPUT_UNCERTAINTY,
     APPLY_SMOOTHING, SMOOTHING_SIGMA
@@ -236,7 +236,7 @@ def main():
         plot_feature_importance(imp_df)
     except Exception as e: print(f"Plotting error: {e}")
 
-    print(f"\n✅ Pipeline Complete. Results in {OUTPUT_DIR}")
+    print(f"\n✅ Pipeline Complete. Results in {RUN_OUTPUT_DIR}")
     
     # cleanup memory
     del grid_raw, grid_ready, temp_grid, unc_grid

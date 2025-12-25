@@ -171,9 +171,19 @@ def plot_temperature_map(
         
         dx_pt = 2.5  # shift 2.5 points right
         
-        # Iterate and plot text with transform
+        label_grid_size = 0.25  # degrees
+        occupied_cells = set()
+        
         for idx, row in stations_to_plot.iterrows():
             if pd.isna(row[temp_col]): continue
+            
+            cell_x = int(row.geometry.x / label_grid_size)
+            cell_y = int(row.geometry.y / label_grid_size)
+            cell_key = (cell_x, cell_y)
+            
+            if cell_key in occupied_cells:
+                continue
+            occupied_cells.add(cell_key)
             
             label_text = f"{row[temp_col]:.1f}"
             txt = ax.text(row.geometry.x, row.geometry.y, label_text, **txt_kw)
@@ -290,7 +300,7 @@ def plot_uncertainty_map(
 
 def plot_feature_importance(importance_df: pd.DataFrame, top_n: int = 20):
     """Modern feature importance plot."""
-    from .config import OUTPUT_DIR
+    from .config import RUN_OUTPUT_DIR
     
     top_features = importance_df.head(top_n)
     
@@ -324,7 +334,7 @@ def plot_feature_importance(importance_df: pd.DataFrame, top_n: int = 20):
     ax.set_axisbelow(True)
     
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR / 'feature_importance.png', dpi=200, 
+    plt.savefig(RUN_OUTPUT_DIR / 'feature_importance.png', dpi=200, 
                 bbox_inches='tight', facecolor='#f8f9fa')
     plt.close()
     
@@ -345,8 +355,8 @@ def plot_model_comparison(
     3. Error distribution histograms
     """
     if output_path is None:
-        from .config import OUTPUT_DIR
-        output_path = OUTPUT_DIR / "model_comparison.png"
+        from .config import RUN_OUTPUT_DIR
+        output_path = RUN_OUTPUT_DIR / "model_comparison.png"
     
     fig = plt.figure(figsize=(20, 12))
     fig.patch.set_facecolor('#f8f9fa')
@@ -497,8 +507,8 @@ def create_comparison_summary_image(
     Create a simple, clean comparison summary image (for presentations).
     """
     if output_path is None:
-        from .config import OUTPUT_DIR
-        output_path = OUTPUT_DIR / "comparison_summary.png"
+        from .config import RUN_OUTPUT_DIR
+        output_path = RUN_OUTPUT_DIR / "comparison_summary.png"
     
     fig, ax = plt.subplots(figsize=(10, 6))
     fig.patch.set_facecolor('white')

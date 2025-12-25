@@ -8,7 +8,7 @@ from rasterio.crs import CRS
 from pathlib import Path
 from datetime import datetime
 
-from .config import OUTPUT_DIR, CRS_POLAND, CRS_WGS84
+from .config import RUN_OUTPUT_DIR, CRS_POLAND, CRS_WGS84
 from .utils import PL_GEOMETRY_2180
 
 def export_grid_to_geotiff(
@@ -137,7 +137,7 @@ def export_temperature_products(
         })
     
     # Export temperature in EPSG:2180 (Poland)
-    temp_file = OUTPUT_DIR / f"temperature_2180_{timestamp}.tif"
+    temp_file = RUN_OUTPUT_DIR / f"temperature_2180_{timestamp}.tif"
     export_grid_to_geotiff(
         temperature_grid,
         grid_x_1d,
@@ -151,7 +151,7 @@ def export_temperature_products(
     
     # Export uncertainty if available
     if uncertainty_grid is not None:
-        unc_file = OUTPUT_DIR / f"uncertainty_2180_{timestamp}.tif"
+        unc_file = RUN_OUTPUT_DIR / f"uncertainty_2180_{timestamp}.tif"
         export_grid_to_geotiff(
             uncertainty_grid,
             grid_x_1d,
@@ -168,12 +168,12 @@ def export_temperature_products(
         print("\nReprojecting to EPSG:4326 for web compatibility...")
         
         # Temperature in WGS84
-        temp_wgs84_file = OUTPUT_DIR / f"temperature_wgs84_{timestamp}.tif"
+        temp_wgs84_file = RUN_OUTPUT_DIR / f"temperature_wgs84_{timestamp}.tif"
         reproject_to_wgs84(temp_file, temp_wgs84_file)
         
         # Uncertainty in WGS84
         if uncertainty_grid is not None:
-            unc_wgs84_file = OUTPUT_DIR / f"uncertainty_wgs84_{timestamp}.tif"
+            unc_wgs84_file = RUN_OUTPUT_DIR / f"uncertainty_wgs84_{timestamp}.tif"
             reproject_to_wgs84(unc_file, unc_wgs84_file)
     
     return temp_file

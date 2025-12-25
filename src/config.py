@@ -21,6 +21,12 @@ CACHE_DIR = PROJECT_ROOT / "cache"
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 CACHE_DIR.mkdir(exist_ok=True, parents=True)
 
+# Timestamped run folder for this execution
+from datetime import datetime
+RUN_TIMESTAMP = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+RUN_OUTPUT_DIR = OUTPUT_DIR / RUN_TIMESTAMP
+RUN_OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+
 # Data files
 RASTER_FILES = {
     "dem": INPUT_DIR / "copernicus_dem.tif",
@@ -128,8 +134,8 @@ SMOOTHING_SIGMA = 1.0
 
 # Visualization
 DISPLAY_STATION_SOURCES = ["IMGW"]
-OUTPUT_PLOT = OUTPUT_DIR / "temperature_map.png"
-OUTPUT_UNCERTAINTY = OUTPUT_DIR / "uncertainty_map.png"
+OUTPUT_PLOT = RUN_OUTPUT_DIR / "temperature_map.png"
+OUTPUT_UNCERTAINTY = RUN_OUTPUT_DIR / "uncertainty_map.png"
 DPI = 300
 
 # Environment
