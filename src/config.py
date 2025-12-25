@@ -100,7 +100,7 @@ LIGHTGBM_PARAMS = {
     'colsample_bytree': 0.6,
     'reg_alpha': 3.5,
     'reg_lambda': 6.0,
-    'feature_fraction_bynode': 0.7,
+    'feature_fraction_bynode': 0.5,
     'n_jobs': -1,
     'verbose': -1,
     'random_state': RANDOM_STATE,
