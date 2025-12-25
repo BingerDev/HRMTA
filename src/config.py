@@ -5,6 +5,7 @@ import sys
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -18,13 +19,12 @@ INPUT_DIR = PROJECT_ROOT / "inputs" / "input-PL"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 CACHE_DIR = PROJECT_ROOT / "cache"
 
-OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-CACHE_DIR.mkdir(exist_ok=True, parents=True)
-
-# Timestamped run folder for this execution
-from datetime import datetime
+# Model run output folder
 RUN_TIMESTAMP = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 RUN_OUTPUT_DIR = OUTPUT_DIR / RUN_TIMESTAMP
+
+OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+CACHE_DIR.mkdir(exist_ok=True, parents=True)
 RUN_OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
 # Data files
