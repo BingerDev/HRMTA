@@ -218,9 +218,10 @@ def plot_temperature_map(
     # Ticks every 5 degrees based on scale range
     ticks5 = np.arange(
         np.floor(scale_vmin/5)*5,
-        np.ceil(scale_vmax/5)*5 + 1, 
+        np.floor(scale_vmax/5)*5 + 1, 
         5, dtype=int
     )
+    ticks5 = ticks5[(ticks5 >= -20) | (ticks5 <= -40)]  # improvement for readability
     cb.set_ticks(ticks5)
     cb.set_ticklabels(ticks5)
     cb.ax.tick_params(labelsize=9)
