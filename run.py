@@ -189,10 +189,14 @@ def main():
     imp_df = model.get_feature_importance()
     print(f"\nTop Features:\n{imp_df.head(10).to_string(index=False)}")
 
+    # Final fit
+    print("\n--- Final Training ---")
+    model.fit(stations_gdf)
+
     # Grid Prediction and export
     print("\n--- Grid Prediction ---")
     grid_raw, gx, gy, glon, glat, mask = create_prediction_grid(GRID_RESOLUTION)
-    grid_ready = extract_grid_features_safe(grid_raw, train_gdf, trend_cols + env_cols)
+    grid_ready = extract_grid_features_safe(grid_raw, stations_gdf, trend_cols + env_cols)
     
     print(f"Predicting on {len(grid_ready):,} points...")
     g_pred, g_unc = model.predict_with_uncertainty(grid_ready)
@@ -211,12 +215,12 @@ def main():
         print(f"Applying intelligent Gaussian smoothing (sigma={SMOOTHING_SIGMA})...")
         temp_grid = nan_gaussian_filter(temp_grid, SMOOTHING_SIGMA)
         unc_grid = nan_gaussian_filter(unc_grid, SMOOTHING_SIGMA)
-        title_suffix_str += f" | Smooth $\sigma$={SMOOTHING_SIGMA}"
+        title_suffix_str += f" | Smooth $\\sigma$={SMOOTHING_SIGMA}"
     
     print(f"Grid Range: {np.nanmin(temp_grid):.1f} to {np.nanmax(temp_grid):.1f}°C")
     
     # Sanity check against training data
-    train_range = (train_gdf['temp'].min(), train_gdf['temp'].max())
+    train_range = (stations_gdf['temp'].min(), stations_gdf['temp'].max())
     if np.nanmin(temp_grid) < train_range[0] - 15 or np.nanmax(temp_grid) > train_range[1] + 15:
         print("⚠️ WARNING: Grid predictions show extreme extrapolation. Check inputs.")
 

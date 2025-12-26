@@ -79,7 +79,12 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     else:
         print("[IMGW] ⚠️ 'isModel' field not found in API response. Using all data.")
     
-    df = df[["statName", "temp", "statId"]].rename(columns={"statName": "station"})
+    # Keep isModel flag for dynamic lapse rate calculation
+    columns_to_keep = ["statName", "temp", "statId"]
+    if 'isModel' in df.columns:
+        columns_to_keep.append('isModel')
+    
+    df = df[columns_to_keep].rename(columns={"statName": "station"})
     df["temp"] = df["temp"].apply(clean_temperature)
     df = df.dropna(subset=["temp"])
     df["source"] = "IMGW"
@@ -234,8 +239,15 @@ def fetch_all_data() -> pd.DataFrame:
     
     combined = pd.concat(all_dfs, ignore_index=True)
     
-    # ensure that columns are consistent
-    combined = combined[["station", "temp", "lat", "lon", "source"]]
+    # ensure that columns are consistent, preserve isModel if available
+    core_cols = ["station", "temp", "lat", "lon", "source"]
+    extra_cols = [c for c in ["isModel"] if c in combined.columns]
+    combined = combined[core_cols + extra_cols]
+    
+    # Report isModel stats if available
+    if 'isModel' in combined.columns:
+        credible_count = (combined['isModel'] == False).sum()
+        print(f"[IMGW] {credible_count} credible IMGW observations are available for dynamic lapse rate calculation.")
     
     print(f"Total stations fetched: {len(combined)}")
     print(combined.groupby("source").size())

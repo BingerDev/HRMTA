@@ -7,11 +7,13 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 from sklearn.neighbors import NearestNeighbors
+from sklearn.linear_model import HuberRegressor
 from tqdm import tqdm
 
 from .config import (
     CRS_WGS84, CRS_POLAND,
-    PERFORM_SPATIAL_QC, QC_NEIGHBORS, QC_ABS_THRESHOLD, QC_LAPSE_RATE
+    PERFORM_SPATIAL_QC, QC_NEIGHBORS, QC_ABS_THRESHOLD,
+    USE_DYNAMIC_LAPSE_RATE, MIN_STATIONS_FOR_DYNAMIC_LR, MIN_ELEVATION_SPREAD, STANDARD_LAPSE_RATE
 )
 from .utils import geocode_station, clean_station_name
 
@@ -43,7 +45,61 @@ def geocode_stations(df: pd.DataFrame, debug: bool = False) -> pd.DataFrame:
     print(f"✓ Geocoding complete: {success} resolved")
     return df.dropna(subset=['lat', 'lon'])
 
-def perform_spatial_qc(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def calculate_dynamic_lapse_rate(gdf: gpd.GeoDataFrame) -> float:
+    """
+    Calculate dynamic lapse rate from credible IMGW observations.
+    """
+    # Filter to credible IMGW observations only
+    if 'isModel' not in gdf.columns:
+        print("   ⚠️ isModel column wasn't found. Cannot calculate dynamic lapse rate.")
+        return STANDARD_LAPSE_RATE
+    
+    credible = gdf[(gdf['source'] == 'IMGW') & (gdf['isModel'] == False)].copy()
+    
+    if len(credible) < MIN_STATIONS_FOR_DYNAMIC_LR:
+        print(f"   ⚠️ Only {len(credible)} credible stations found (need {MIN_STATIONS_FOR_DYNAMIC_LR}). Using fallback.")
+        return STANDARD_LAPSE_RATE
+    
+    # check elevation spread
+    if 'dem' not in credible.columns:
+        print("   ⚠️ No DEM data available. Using fallback.")
+        return STANDARD_LAPSE_RATE
+    
+    elev_min = credible['dem'].min()
+    elev_max = credible['dem'].max()
+    elev_spread = elev_max - elev_min
+    
+    if elev_spread < MIN_ELEVATION_SPREAD:
+        print(f"   ⚠️ Elevation spread {elev_spread:.0f}m < {MIN_ELEVATION_SPREAD}m . Using fallback.")
+        return STANDARD_LAPSE_RATE
+    
+    # prepare the data
+    X = credible['dem'].values.reshape(-1, 1)
+    y = credible['temp'].values
+    
+    # Huber
+    try:
+        model = HuberRegressor(epsilon=1.35, max_iter=200)
+        model.fit(X, y)
+        
+        slope = model.coef_[0]
+        lapse_rate = -slope
+        
+        # Sanity check
+        if lapse_rate < -0.015 or lapse_rate > 0.015:
+            print(f"   ⚠️ Calculated lapse rate {lapse_rate:.4f} is out of range. Using fallback.")
+            return STANDARD_LAPSE_RATE
+        
+        print(f"   ✅ Dynamic lapse rate: {lapse_rate:.4f} °C/m (from {len(credible)} stations, {elev_spread:.0f}m spread)")
+        
+        return lapse_rate
+        
+    except Exception as e:
+        print(f"   ⚠️ Regression failed: {e}. Using fallback.")
+        return STANDARD_LAPSE_RATE
+
+
+def perform_spatial_qc(gdf: gpd.GeoDataFrame, lapse_rate: float = None) -> gpd.GeoDataFrame:
     """
     Advanced Spatial Outlier Detection.
     Compares each station to its neighbors, adjusting for elevation.
@@ -54,6 +110,18 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         return gdf
 
     print(f"\nPerforming Spatial Quality Control...")
+    
+    # Determine which lapse rate to use
+    if lapse_rate is not None:
+        effective_lapse_rate = lapse_rate
+        print(f"   Using provided lapse rate: {effective_lapse_rate:.4f} °C/m")
+    elif USE_DYNAMIC_LAPSE_RATE:
+        print("   Calculating dynamic lapse rate based on credible IMGW observations...")
+        effective_lapse_rate = calculate_dynamic_lapse_rate(gdf)
+    else:
+        effective_lapse_rate = STANDARD_LAPSE_RATE
+        print(f"   Using static lapse rate: {effective_lapse_rate:.4f} °C/m")
+    
     print(f"   Criteria: Deviation > {QC_ABS_THRESHOLD}°C from {QC_NEIGHBORS} neighbors (elevation adjusted)")
 
     # Work in projected coordinates
@@ -68,8 +136,20 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     outlier_mask = np.zeros(len(gdf), dtype=bool)
     deviations = []
+    
+    # Track credible stations
+    trusted_count = 0
+    has_isModel = 'isModel' in gdf.columns
 
     for i in range(len(gdf)):
+        row = gdf.iloc[i]
+        
+        # Bypass QC for credible IMGW observations
+        if has_isModel and row['source'] == 'IMGW' and row['isModel'] == False:
+            deviations.append(0.0)
+            trusted_count += 1
+            continue
+        
         # Neighbors (excluding self, which is index 0)
         nbr_indices = indices[i, 1:]
         
@@ -81,8 +161,8 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         
         # Adjust neighbor temperatures to the elevation of the current station
         elev_diffs = my_dem - nbr_temps
-        # Standard lapse rate adjustment (approximate, but good for QC)
-        adjusted_nbr_temps = nbr_temps - (nbr_dems - my_dem) * QC_LAPSE_RATE
+        # Use effective lapse rate for elevation adjustment
+        adjusted_nbr_temps = nbr_temps - (nbr_dems - my_dem) * effective_lapse_rate
         
         # Expected temperature is median of adjusted neighbors (robust to neighbor outliers)
         expected_temp = np.nanmedian(adjusted_nbr_temps)
@@ -95,6 +175,9 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             outlier_mask[i] = True
 
     num_outliers = np.sum(outlier_mask)
+    
+    if trusted_count > 0:
+        print(f"   ✅ {trusted_count} credible IMGW observations successfully bypassed QC")
     
     if num_outliers > 0:
         # print some examples
