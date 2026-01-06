@@ -84,7 +84,7 @@ SPATIAL_BUFFER_KM = 20
 # Architecture: Robust spatial-physics stacking
 
 # Stage 1: HuberRegressor
-TREND_FEATURES = ['dem', 'y_pl', 'x_pl'] # Elevation + Latitude + Longitude
+TREND_FEATURES = ['dem', 'y_pl', 'x_pl', 'y_pl_sq', 'x_pl_sq', 'x_y_interaction'] # Elevation + Linear coords + Quadratic surface
 
 # Ensemble settings
 USE_ENSEMBLE = True

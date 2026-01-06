@@ -17,6 +17,58 @@ from urllib3.util.retry import Retry
 
 # IMGW
 IMGW_URL = "https://rafalraczynski.com.pl/imgw/dane-imgw/getJSON.php?type=table&province={prov}&sort=temp&order=asc"
+IMGW_METEO_URL = "https://danepubliczne.imgw.pl/api/data/meteo/"
+IMGW_HYDRO_URL = "https://danepubliczne.imgw.pl/api/data/hydro/"
+
+def get_imgw_official_coords() -> dict:
+    """
+    Fetch official IMGW station coordinates from public API
+
+    Returns:
+        dict mapping station_name -> (lat, lon)
+    """
+    coords = {}
+    
+    # Fetch meteo stations
+    try:
+        response = requests.get(IMGW_METEO_URL, timeout=60)
+        response.raise_for_status()
+        for station in response.json():
+            name = station.get('nazwa_stacji', '').strip().upper()
+            lat, lon = station.get('lat'), station.get('lon')
+            if name and lat and lon:
+                coords[name] = (float(lat), float(lon))
+        meteo_count = len(coords)
+    except Exception as e:
+        print(f"[IMGW] ⚠️ Meteo coords failed: {e}")
+        meteo_count = 0
+    
+    # Fetch hydro stations
+    try:
+        response = requests.get(IMGW_HYDRO_URL, timeout=60)
+        response.raise_for_status()
+        for station in response.json():
+            name = station.get('stacja', '').strip().upper()
+            lat, lon = station.get('lat'), station.get('lon')
+            if name and lat and lon and name not in coords:
+                coords[name] = (float(lat), float(lon))
+        hydro_count = len(coords) - meteo_count
+    except Exception as e:
+        print(f"[IMGW] ⚠️ Hydro coords failed: {e}")
+        hydro_count = 0
+    
+    print(f"[IMGW] Loaded {len(coords)} official coordinates ({meteo_count} meteo + {hydro_count} hydro)")
+    return coords
+
+# Cache
+_IMGW_COORDS_CACHE = None
+
+def _get_cached_coords():
+    """Get cached coordinates + fetching if needed"""
+    global _IMGW_COORDS_CACHE
+    if _IMGW_COORDS_CACHE is None:
+        _IMGW_COORDS_CACHE = get_imgw_official_coords()
+    return _IMGW_COORDS_CACHE
 
 def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     """
@@ -83,11 +135,27 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     columns_to_keep = ["statName", "temp", "statId"]
     if 'isModel' in df.columns:
         columns_to_keep.append('isModel')
+    if 'provName' in df.columns:
+        columns_to_keep.append('provName')
     
     df = df[columns_to_keep].rename(columns={"statName": "station"})
     df["temp"] = df["temp"].apply(clean_temperature)
     df = df.dropna(subset=["temp"])
     df["source"] = "IMGW"
+    
+    # Apply official coordinates from IMGW public API
+    coord_lookup = _get_cached_coords()
+    if coord_lookup:
+        df['lat'] = None
+        df['lon'] = None
+        matched = 0
+        for idx in df.index:
+            name = df.at[idx, 'station'].strip().upper()
+            if name in coord_lookup:
+                df.at[idx, 'lat'] = coord_lookup[name][0]
+                df.at[idx, 'lon'] = coord_lookup[name][1]
+                matched += 1
+        print(f"[IMGW] Matched {matched}/{len(df)} stations with official coordinates")
     
     print(f"[IMGW] Total: {len(df)} stations with valid data")
     return df
@@ -239,9 +307,9 @@ def fetch_all_data() -> pd.DataFrame:
     
     combined = pd.concat(all_dfs, ignore_index=True)
     
-    # ensure that columns are consistent, preserve isModel if available
+    # ensure that columns are consistent, preserve isModel and provName if available
     core_cols = ["station", "temp", "lat", "lon", "source"]
-    extra_cols = [c for c in ["isModel"] if c in combined.columns]
+    extra_cols = [c for c in ["isModel", "provName"] if c in combined.columns]
     combined = combined[core_cols + extra_cols]
     
     # Report isModel stats if available

@@ -352,9 +352,22 @@ def add_coordinate_features(gdf: gpd.GeoDataFrame) -> pd.DataFrame:
     features['x_pl'] = [geom.x for geom in gdf_poland.geometry]
     features['y_pl'] = [geom.y for geom in gdf_poland.geometry]
     
-    # removed x_normalized and y_normalized to prevent stripes
+    # Polynomial terms for curved trend surface
+    X_CENTER_PL = 520000.0  # approximate center of Poland in EPSG:2180
+    Y_CENTER_PL = 455000.0
+    COORD_SCALE = 250000.0  # km-scale normalization
     
-    print(f"   ✓ Added coordinate features (x_pl, y_pl, lat, lon)")
+    x_arr = np.array(features['x_pl'])
+    y_arr = np.array(features['y_pl'])
+    
+    x_norm = (x_arr - X_CENTER_PL) / COORD_SCALE
+    y_norm = (y_arr - Y_CENTER_PL) / COORD_SCALE
+    
+    features['x_pl_sq'] = x_norm ** 2
+    features['y_pl_sq'] = y_norm ** 2
+    features['x_y_interaction'] = x_norm * y_norm
+    
+    print(f"   ✓ Added coordinate features (x_pl, y_pl, lat, lon + polynomial terms)")
     
     return features
 

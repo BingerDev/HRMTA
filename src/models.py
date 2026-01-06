@@ -174,8 +174,8 @@ class PhysicsTrendEnvMLModel(BaseEstimator, RegressorMixin):
                     'points', gdf_proj.geometry.x.values, gdf_proj.geometry.y.values,
                     backend='loop' # Slower but safer against memory/singular errors
                 )
-                # Sanity clamp kriging residuals to prevent explosions far from data
-                k_pred = np.clip(k_pred, -5.0, 5.0) 
+                # Sanity clamp kriging residuals and scale down to reduce artifacts
+                k_pred = np.clip(k_pred, -5.0, 5.0) * 0.7
                 preds += k_pred
             except Exception:
                 pass # Fallback to S1+S2

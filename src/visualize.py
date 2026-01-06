@@ -192,6 +192,59 @@ def plot_temperature_map(
             txt.set_transform(txt.get_transform() + 
                               mtransforms.ScaledTranslation(dx_pt/72, 0, fig.dpi_scale_trans))
 
+    # Tmax/Tmin annotation
+    if stations_gdf is not None and 'source' in stations_gdf.columns and 'temp' in stations_gdf.columns:
+        # Filter for IMGW observational stations
+        imgw_mask = stations_gdf['source'] == 'IMGW'
+        if 'isModel' in stations_gdf.columns:
+            imgw_mask = imgw_mask & (stations_gdf['isModel'] == False)
+        
+        imgw_obs = stations_gdf[imgw_mask]
+        
+        if not imgw_obs.empty:
+            tmax_idx = imgw_obs['temp'].idxmax()
+            tmin_idx = imgw_obs['temp'].idxmin()
+            
+            tmax_val = imgw_obs.loc[tmax_idx, 'temp']
+            tmin_val = imgw_obs.loc[tmin_idx, 'temp']
+            tmax_station = imgw_obs.loc[tmax_idx, 'station'].title() if 'station' in imgw_obs.columns else ''
+            tmin_station = imgw_obs.loc[tmin_idx, 'station'].title() if 'station' in imgw_obs.columns else ''
+            
+            tmax_prov = imgw_obs.loc[tmax_idx, 'provName'] if 'provName' in imgw_obs.columns else ''
+            tmin_prov = imgw_obs.loc[tmin_idx, 'provName'] if 'provName' in imgw_obs.columns else ''
+            tmax_woj = f"(woj. {tmax_prov.lower()})" if tmax_prov else ''
+            tmin_woj = f"(woj. {tmin_prov.lower()})" if tmin_prov else ''
+            
+            text_x = minx + (maxx - minx) * 0.02
+            text_y_tmax = miny + (maxy - miny) * 0.12
+            text_y_tmin = miny + (maxy - miny) * 0.045
+            name_offset = (maxy - miny) * 0.004
+            woj_offset = (maxy - miny) * 0.003
+            
+            extrema_kw = dict(
+                ha='left', zorder=10,
+                path_effects=[
+                    patheffects.Stroke(linewidth=3, foreground='white', alpha=0.9),
+                    patheffects.Normal()
+                ]
+            )
+            
+            # Tmax
+            ax.text(text_x, text_y_tmax, f"{tmax_val:.1f}°C",
+                    fontsize=18, color='#FF0000', weight='bold', va='bottom', **extrema_kw)
+            ax.text(text_x, text_y_tmax - name_offset, tmax_station,
+                    fontsize=11, color='#FF0000', weight='bold', va='top', **extrema_kw)
+            ax.text(text_x, text_y_tmax - name_offset - woj_offset - (maxy - miny) * 0.012, tmax_woj,
+                    fontsize=7, color='#909090', weight='bold', va='top', **extrema_kw)
+            
+            # Tmin
+            ax.text(text_x, text_y_tmin, f"{tmin_val:.1f}°C",
+                    fontsize=18, color='#1A00FF', weight='bold', va='bottom', **extrema_kw)
+            ax.text(text_x, text_y_tmin - name_offset, tmin_station,
+                    fontsize=11, color='#1A00FF', weight='bold', va='top', **extrema_kw)
+            ax.text(text_x, text_y_tmin - name_offset - woj_offset - (maxy - miny) * 0.012, tmin_woj,
+                    fontsize=7, color='#909090', weight='bold', va='top', **extrema_kw)
+
     # Titles & Footer
     utc_now = datetime.utcnow().strftime('%Y-%m-%d  %H:%M  UTC')
     
