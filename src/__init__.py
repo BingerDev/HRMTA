@@ -1,6 +1,6 @@
 """HRMTA - High-Resolution Mesoscale Temperature Analysis"""
 
-__version__ = "1.2.0"
+__version__ = "1.2.5"
 
 from . import config
 from . import utils

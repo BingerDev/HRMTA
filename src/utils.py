@@ -205,7 +205,7 @@ def nan_gaussian_filter(data, sigma):
     
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        smoothed_data = gaussian_filter(filled_data, sigma, mode='constant', cval=0)
+        smoothed_data = gaussian_filter(filled_data, sigma, mode='nearest')
         smoothed_mask = gaussian_filter(mask, sigma, mode='constant', cval=0)
     
     # Normalize, divide smoothed data by smoothed weights

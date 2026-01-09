@@ -18,7 +18,8 @@ from datetime import datetime
 
 from .config import (
     COLOR_SCALE, DPI, OUTPUT_PLOT,
-    GRID_RESOLUTION, DISPLAY_STATION_SOURCES
+    GRID_RESOLUTION, DISPLAY_STATION_SOURCES,
+    DISPLAY_OBSERVATIONS_ONLY
 )
 from .utils import PL_BOUNDARY_WGS84
 
@@ -134,6 +135,9 @@ def plot_temperature_map(
             stations_to_plot = stations_gdf[stations_gdf['source'].isin(DISPLAY_STATION_SOURCES)].copy()
         else:
             stations_to_plot = stations_gdf.copy()
+
+        if DISPLAY_OBSERVATIONS_ONLY and 'isModel' in stations_to_plot.columns:
+            stations_to_plot = stations_to_plot[stations_to_plot['isModel'] != True].copy()
 
         # Only proceed if we have stations left to plot
         if not stations_to_plot.empty:

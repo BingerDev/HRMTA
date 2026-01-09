@@ -20,8 +20,13 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 CACHE_DIR = PROJECT_ROOT / "cache"
 
 # Model run output folder
-RUN_TIMESTAMP = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-RUN_OUTPUT_DIR = OUTPUT_DIR / RUN_TIMESTAMP
+KEEP_RUN_HISTORY = False
+
+if KEEP_RUN_HISTORY:
+    RUN_TIMESTAMP = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    RUN_OUTPUT_DIR = OUTPUT_DIR / RUN_TIMESTAMP
+else:
+    RUN_OUTPUT_DIR = OUTPUT_DIR
 
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 CACHE_DIR.mkdir(exist_ok=True, parents=True)
@@ -139,6 +144,7 @@ SMOOTHING_SIGMA = 1.0
 
 # Visualization
 DISPLAY_STATION_SOURCES = ["IMGW"]
+DISPLAY_OBSERVATIONS_ONLY = True
 OUTPUT_PLOT = RUN_OUTPUT_DIR / "temperature_map.png"
 OUTPUT_UNCERTAINTY = RUN_OUTPUT_DIR / "uncertainty_map.png"
 DPI = 300
