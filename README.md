@@ -68,7 +68,7 @@ If you want to add even more weather stations on the map, you can use an optiona
    ```
 
 > [!NOTE]
-> Please take into account that this step is optional and the model pipeline will normally operate even without Netatmo data being available. The model will default to IMGW and Traxelektronik observational data, which is configured automatically and you don't have to obtain any additional API keys for it. Consider whether you would like to have a few hundred additional weather station data or if that is too time-consuming for you and you would like to proceed automatically using default observational data sources.
+> Please take into account that this step is optional and the model pipeline will normally operate even without Netatmo data being available. The model will default to IMGW, Traxelektronik, and Edwin observational data, which is configured automatically and you don't have to obtain any additional API keys for it. Consider whether you would like to have a few hundred additional weather station data or if that is too time-consuming for you and you would like to proceed automatically using default observational data sources.
 
 ### 5. Run the pipeline
 Generate your first temperature map by running the next command in your terminal:
@@ -91,7 +91,12 @@ All configuration variables are being stored in the model's main configuration f
 - `GRID_RESOLUTION` - Crucial variable that most of the users will likely wish to change the most frequently from time to time. This parameter is responsible for the entire resolution of the temperature map in meters. For example, `5000` stands for `5 km`. The higher the resolution is, the slower the model will run.
 - `APPLY_SMOOTHING` - True/False. Allows you to apply smoothing to the temperature map.
 - `SMOOTHING_SIGMA` - If `APPLY_SMOOTHING` is set to True, this parameter allows you to control the intensity of smoothing that is being applied. The higher the value is, the more smoothed the temperature map will get.
-- `DISPLAY_STATION_SOURCES` - You can use this parameter to choose which observational data sources you want to be displayed on the map. Due to potential conflicts between more accurate and less accurate temperature readings, the default setting is set to IMGW stations display and it is the recommended setting. However, if you would want to display all the station data that the model is being trained on, then you can add Traxelektronik and/or Netatmo to the list by adding a comma and following the existing format.
+- `DISPLAY_STATION_SOURCES` - You can use this parameter to choose which observational data sources you want to be displayed on the map. Due to potential conflicts between more accurate and less accurate temperature readings, the default setting is set to IMGW stations display and it is the recommended setting. However, if you would want to display all the station data that the model is being trained on, then you can add Traxelektronik (`TRAX`), Edwin (`EDWIN`), and/or Netatmo (`NETATMO`) to the list by adding a comma and following the existing format.
+- `KEEP_RUN_HISTORY` - True/False. When set to True, it saves the model output data to a dedicated, timestamped folder each time you run the model. When set to False, the data is being simply put to the `output/` folder and the files are being overwritten each time you run the model, which helps to reduce the disk space usage when the model is run frequently, but it is recommended to keep it at True if you run the model rarely and care about preserving the history of the previous runs.
+- `INTERPOLATION_REGION` - This parameter is responsible for the region of interpolation. By default, it is set to the entire Poland, but if you want to run the model only for a certain region/voivodeship, you can set the value of this parameter to the name of the voivodeship, like `Mazowieckie` or `Małopolskie`. It also supports English names. Regional scale also helps to significantly reduce the runtime.
+- `DISPLAY_COUNTIES` - True/False. It displays counties on the map when `INTERPOLATION_REGION` is set to a certain region. If you don't want them to be visible, set the value of this parameter to False.
+- `REGIONAL_BUFFER_KM` - Controls the buffer distance (in km) from the selected region borders when in a regional mode, which helps to enhance the model awareness of the current situation outside the region by using additional station data within the defined distance extent to train the model.
+- `MIN_REGIONAL_STATIONS` - This parameter accepts a number value and controls the minimum number of stations that should be located within the region extent. If fewer stations are available, the model will print a warning that the result predictions may be unreliable, and the overall interpolation quality will worsen.
 
 We strongly don't recommend editing any other variables in the configuration file, especially ones related to Spatial CV and the model architecture itself, unless you are an expert and know what you are doing. Edit the configuration file with responsibility.
 
@@ -144,7 +149,7 @@ No, at least not yet. There are plans to automatically include more pre-built da
 
 **Can I run the model only for specific region of Poland?**
 
-No, it is currently not possible. This is planned for future versions of the model.
+Yes, in order to do that you need to simply update the value of the `INTERPOLATION_REGION` parameter in the `src/config.py` configuration file with a region name (either in English or in Polish) that you want to be used for the interpolation.
 
 **Is there a way to switch between smoothed and gridded output?**
 
@@ -156,7 +161,7 @@ There is a significant portion of the text describing current main limitations o
 
 **How long does it take to run the model?**
 
-It depends on the selected resolution in the configuration file. By default, the resolution is set to 5 km, and it usually takes approximately 5-10 minutes to fully run the model after first initialization run.
+It depends on the selected resolution and the extent of interpolation in the configuration file. By default, the resolution is set to 5 km, and it usually takes approximately 5-10 minutes to fully run the model after first initialization run on a national scale, and a bit faster on a regional scale.
 
 **How does the model handle larger margin of error of observational data with PWS/RWS stations?**
 
@@ -180,7 +185,7 @@ Source code of HRMTA is being licensed under the **MIT License**. Please see the
 ## Data
 The environmental dataset (`input-PL`) contains pre-processed snippets from third-party sources. These files are distributed under their respective open licenses.
 *   **Check [DATA_LICENSE.txt](inputs/input-PL/DATA_LICENSE.txt)** for full legal attribution and usage terms regarding the input environmental dataset.
-*   Usage of observational data from IMGW, Traxelektronik, and Netatmo is subject to the terms of service of those respective providers.
+*   Usage of observational data from IMGW, Traxelektronik, Netatmo, and Edwin is subject to the terms of service of those respective providers.
 
 ## Gallery
 <img src="assets/gallery_1.png" width="100%">

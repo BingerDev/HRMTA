@@ -21,7 +21,9 @@ from src.config import (
     OUTPUT_DIR, RUN_OUTPUT_DIR, SPATIAL_BUFFER_KM,
     USE_ENSEMBLE, ENSEMBLE_N_MODELS, ENSEMBLE_SEEDS,
     TREND_FEATURES, LIGHTGBM_PARAMS, OUTPUT_PLOT, OUTPUT_UNCERTAINTY,
-    APPLY_SMOOTHING, SMOOTHING_SIGMA
+    APPLY_SMOOTHING, SMOOTHING_SIGMA,
+    INTERPOLATION_REGION, MIN_REGIONAL_STATIONS,
+    REGIONAL_BUFFER_KM
 )
 from src.fetch_data import fetch_all_data
 from src.prepare_features import prepare_station_data, perform_spatial_qc
@@ -30,15 +32,18 @@ from src.models import SimpleKrigingBaseline, EnsembleHybridModel
 from src.evaluate import evaluate_predictions, print_metrics, compare_models, print_model_comparison
 from src.visualize import plot_temperature_map, plot_feature_importance, plot_uncertainty_map, plot_model_comparison, create_comparison_summary_image
 from src.export_utils import export_temperature_products
-from src.utils import PL_GEOMETRY_2180, nan_gaussian_filter
+from src.utils import PL_GEOMETRY_2180, nan_gaussian_filter, get_active_geometry, get_region_display_name, is_national_mode, VOIVODESHIP_NAMES
 
 warnings.filterwarnings("ignore")
 
 # Grid and splut utilities
 def create_prediction_grid(resolution=GRID_RESOLUTION):
-    """Create empty grid within Poland."""
-    print(f"\nCreating {resolution}m Grid...")
-    bounds = PL_GEOMETRY_2180.bounds
+    """Create empty grid within active region."""
+    region_geom = get_active_geometry(buffered=False)
+    region_name = INTERPOLATION_REGION if not is_national_mode(INTERPOLATION_REGION) else "Poland"
+    print(f"\nCreating {resolution}m Grid for {region_name}...")
+    
+    bounds = region_geom.bounds
     grid_x_1d = np.arange(bounds[0], bounds[2], resolution)
     grid_y_1d = np.arange(bounds[3], bounds[1], -resolution) # top to bottom
     grid_x, grid_y = np.meshgrid(grid_x_1d, grid_y_1d)
@@ -49,15 +54,15 @@ def create_prediction_grid(resolution=GRID_RESOLUTION):
     transformer = Transformer.from_crs(CRS_POLAND, CRS_WGS84, always_xy=True)
     grid_lon, grid_lat = transformer.transform(grid_x, grid_y)
     
-    # Poland mask
-    poland_mask = rasterize([(PL_GEOMETRY_2180, 1)], out_shape=grid_x.shape, transform=transform, fill=0, dtype='uint8').astype(bool)
+    # Region mask
+    region_mask = rasterize([(region_geom, 1)], out_shape=grid_x.shape, transform=transform, fill=0, dtype='uint8').astype(bool)
     
     # Valid points GDF
-    valid_x, valid_y = grid_x[poland_mask], grid_y[poland_mask]
+    valid_x, valid_y = grid_x[region_mask], grid_y[region_mask]
     grid_gdf = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in zip(valid_x, valid_y)], crs=CRS_POLAND)
     
     print(f"Grid: {grid_x.shape}, Active Points: {len(grid_gdf):,}")
-    return grid_gdf, grid_x_1d, grid_y_1d, grid_lon, grid_lat, poland_mask
+    return grid_gdf, grid_x_1d, grid_y_1d, grid_lon, grid_lat, region_mask
 
 def extract_grid_features_safe(grid_gdf, train_gdf, all_needed_cols):
     """Extract features for grid, filling missing with training medians."""
@@ -138,7 +143,39 @@ def main():
     if len(raw_data) < 50: return
     
     stations_gdf = prepare_station_data(raw_data)
-    
+
+    # Regional filtering
+    if not is_national_mode(INTERPOLATION_REGION):
+        buffered_geom = get_active_geometry(buffered=True)
+        stations_gdf = stations_gdf.to_crs(CRS_POLAND)
+        regional_mask = stations_gdf.geometry.within(buffered_geom)
+        regional_count = regional_mask.sum()
+        
+        print(f"\nRegional mode: {INTERPOLATION_REGION}")
+        print(f"   Stations in region + {REGIONAL_BUFFER_KM}km buffer: {regional_count}")
+        
+        if regional_count < MIN_REGIONAL_STATIONS:
+            print(f"   ⚠️ Only {regional_count} stations (< {MIN_REGIONAL_STATIONS}). Results may be unreliable.")
+        
+        stations_gdf = stations_gdf[regional_mask].copy()
+        
+        # Filter out IMGW stations with provName that doesn't match the region
+        canonical_region = VOIVODESHIP_NAMES.get(INTERPOLATION_REGION.lower(), INTERPOLATION_REGION.lower())
+
+        if 'provName' in stations_gdf.columns:
+            unbuffered_geom = get_active_geometry(buffered=False)
+            inside_region = stations_gdf.geometry.within(unbuffered_geom)
+            imgw_mask = stations_gdf['source'] == 'IMGW'
+            provname_mismatch = inside_region & imgw_mask & (stations_gdf['provName'].str.lower() != canonical_region)
+            mismatch_count = provname_mismatch.sum()
+            
+            if mismatch_count > 0:
+                mismatched = stations_gdf[provname_mismatch]['station'].tolist()[:5]
+                print(f"   ⚠️ Filtering {mismatch_count} misplaced IMGW stations: {mismatched}")
+                stations_gdf = stations_gdf[~provname_mismatch].copy()
+        
+        stations_gdf = stations_gdf.to_crs(CRS_WGS84)
+
     # Engineer features
     stations_gdf, all_eng_cols = engineer_all_features(stations_gdf)
     
@@ -185,13 +222,13 @@ def main():
     comp_df = compare_models(test_gdf['temp'], base_test_pred, test_pred, ("Kriging", "Hybrid"))
     print_model_comparison(comp_df)
     
-    # Importance
-    imp_df = model.get_feature_importance()
-    print(f"\nTop Features:\n{imp_df.head(10).to_string(index=False)}")
-
     # Final fit
     print("\n--- Final Training ---")
     model.fit(stations_gdf)
+    
+    # Importance
+    imp_df = model.get_feature_importance()
+    print(f"\nTop Features:\n{imp_df.head(10).to_string(index=False)}")
 
     # Grid Prediction and export
     print("\n--- Grid Prediction ---")
@@ -228,7 +265,18 @@ def main():
     export_temperature_products(temp_grid, unc_grid, gx, gy, test_metrics)
     
     # Visualization
-    plot_temperature_map(glon, glat, temp_grid, stations_gdf, OUTPUT_PLOT, show=False, title_suffix=f" | {perf_label}")
+    region_display = get_region_display_name(INTERPOLATION_REGION)
+    
+    if INTERPOLATION_REGION.lower() != "poland":
+        region_geom = get_active_geometry(buffered=False)
+        vis_stations = stations_gdf.to_crs(CRS_POLAND)
+        vis_stations = vis_stations[vis_stations.geometry.within(region_geom)].copy()
+        vis_stations = vis_stations.to_crs(CRS_WGS84)
+        print(f"Visualization: {len(vis_stations)} stations are within {INTERPOLATION_REGION}")
+    else:
+        vis_stations = stations_gdf
+    
+    plot_temperature_map(glon, glat, temp_grid, vis_stations, OUTPUT_PLOT, show=False, title_suffix=f" | {perf_label}", region_name=region_display)
     plot_uncertainty_map(glon, glat, unc_grid, output_path=OUTPUT_UNCERTAINTY, title="Ensemble Prediction Uncertainty")
     
     # Visualization data preparation for comparison plots

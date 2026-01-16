@@ -1,15 +1,17 @@
 """
-Fetch temperature data from IMGW, Netatmo, and TraxElektronik.
+Fetch temperature data from IMGW, Netatmo, TraxElektronik, and Edwin.
 """
 import re
 import json
+import concurrent.futures
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple
 import requests
 import time
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from .config import IMGW_PROVINCES, IMGW_DATA_MODE, TRAX_REGION_IDS, NETATMO_CONFIG
+from .config import IMGW_PROVINCES, IMGW_DATA_MODE, TRAX_REGION_IDS, NETATMO_CONFIG, EDWIN_CONFIG
 from .utils import is_in_poland, clean_temperature
 
 from requests.adapters import HTTPAdapter
@@ -276,6 +278,101 @@ def fetch_netatmo() -> pd.DataFrame:
     print(f"[NETATMO] Total: {len(df)} stations")
     return df
 
+# Edwin
+def _fetch_edwin_station_data(session, station_id: int, start_date: str) -> dict:
+    """Fetch latest observation from one Edwin station."""
+    try:
+        url = f"{EDWIN_CONFIG['api_base']}/meteo/station/{station_id}?page=0&size=100&after={start_date}"
+        res = session.get(url, timeout=10)
+        if res.ok:
+            content = res.json().get('content', [])
+            if content:
+                data = content[-1]  # most recent observation
+                data.pop('links', None)
+                return data
+    except:
+        pass
+    return None
+
+def fetch_edwin() -> pd.DataFrame:
+    """
+    Fetch Edwin data using concurrent requests.
+    
+    Returns:
+        DataFrame with columns: station, temp, lat, lon, source
+    """
+    api_base = EDWIN_CONFIG['api_base']
+    
+    # Fetch station metadata
+    meta_frames = []
+    for stype in EDWIN_CONFIG['station_types']:
+        try:
+            url = f"{api_base}/observationStation?active=true&size=10000&sort=asc&type={stype}"
+            res = requests.get(url, timeout=15)
+            if res.ok:
+                stations = res.json().get('content', [])
+                meta_frames.append(pd.DataFrame(stations))
+                print(f"[EDWIN] Loaded {len(stations)} {stype} stations")
+        except Exception as e:
+            print(f"[EDWIN] ⚠️ Metadata failed ({stype}): {e}")
+    
+    if not meta_frames:
+        print("[EDWIN] ❌ No station metadata available")
+        return pd.DataFrame(columns=["station", "temp", "lat", "lon", "source"])
+    
+    df_meta = pd.concat(meta_frames, ignore_index=True)
+    
+    # Time range for observations
+    start_date = (datetime.now(timezone.utc) - timedelta(hours=EDWIN_CONFIG['lookback_hours'])).strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    # Concurrent fetching
+    results = []
+    with requests.Session() as session:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=EDWIN_CONFIG['workers']) as executor:
+            futures = [executor.submit(_fetch_edwin_station_data, session, sid, start_date) for sid in df_meta['id']]
+            for future in concurrent.futures.as_completed(futures):
+                if data := future.result():
+                    results.append(data)
+    
+    if not results:
+        print("[EDWIN] ❌ No recent observations")
+        return pd.DataFrame(columns=["station", "temp", "lat", "lon", "source"])
+    
+    df_obs = pd.DataFrame(results)
+    
+    # Merge observations with metadata to receive coordinates
+    df = df_obs.merge(df_meta[['id', 'name', 'latitude', 'longitude']], 
+                      left_on='stationId', right_on='id', how='left')
+    
+    # Extract temperature and build output DF
+    records = []
+    for _, row in df.iterrows():
+        temp = row.get('airTemperature')
+        lat = row.get('latitude')
+        lon = row.get('longitude')
+        name = row.get('name', 'Unknown')
+        
+        # Skip if no temperature/coordinates
+        if pd.isna(temp) or pd.isna(lat) or pd.isna(lon):
+            continue
+        
+        # Filter sensor failures
+        humidity = row.get('relativeHumidity')
+        if humidity == 0.0:
+            continue
+        
+        records.append({
+            "station": name,
+            "temp": float(temp),
+            "lat": float(lat),
+            "lon": float(lon),
+            "source": "EDWIN"
+        })
+    
+    df_final = pd.DataFrame(records)
+    print(f"[EDWIN] Total: {len(df_final)} stations with valid data")
+    return df_final
+
 # Combined fetching
 def fetch_all_data() -> pd.DataFrame:
     """
@@ -291,6 +388,7 @@ def fetch_all_data() -> pd.DataFrame:
     imgw_df = fetch_imgw()
     trax_df = fetch_trax()
     netatmo_df = fetch_netatmo()
+    edwin_df = fetch_edwin()
     
     # add lat/lon columns to IMGW and Traxelektronik (will be filled during geocoding)
     for df in [imgw_df, trax_df]:
@@ -299,7 +397,7 @@ def fetch_all_data() -> pd.DataFrame:
             df['lon'] = None
     
     # combine all
-    all_dfs = [df for df in [imgw_df, trax_df, netatmo_df] if not df.empty]
+    all_dfs = [df for df in [imgw_df, trax_df, netatmo_df, edwin_df] if not df.empty]
     
     if not all_dfs:
         print("⚠️  No data fetched from any source!")

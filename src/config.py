@@ -20,7 +20,7 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 CACHE_DIR = PROJECT_ROOT / "cache"
 
 # Model run output folder
-KEEP_RUN_HISTORY = False
+KEEP_RUN_HISTORY = True
 
 if KEEP_RUN_HISTORY:
     RUN_TIMESTAMP = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -61,6 +61,13 @@ NETATMO_CONFIG = {
     "access_token": os.getenv("NETATMO_TOKEN", "YOUR_TOKEN_HERE")
 }
 
+EDWIN_CONFIG = {
+    "api_base": "https://edwin-meteo.apps.paas.psnc.pl",
+    "station_types": ["WEATHER"],
+    "workers": 20,
+    "lookback_hours": 2,
+}
+
 # Spatial Outlier detection settings
 PERFORM_SPATIAL_QC = True
 QC_NEIGHBORS = 10
@@ -76,6 +83,14 @@ MIN_ELEVATION_SPREAD = 200
 # Coordinate systems definition
 CRS_WGS84 = "EPSG:4326"
 CRS_POLAND = "EPSG:2180"
+
+# Interpolation extent settings
+INTERPOLATION_REGION = "Poland" # Region name PL/EN (like "Mazowieckie" / "Masovian")
+REGIONAL_BUFFER_KM = 40
+MIN_REGIONAL_STATIONS = 30
+VOIVODESHIP_SHAPEFILE = INPUT_DIR / "poland_voivodeships.shp"
+COUNTIES_SHAPEFILE = INPUT_DIR / "poland_counties.shp"
+DISPLAY_COUNTIES = True
 
 # Model evaluation settings
 GRID_RESOLUTION = 5000  # meters

@@ -18,10 +18,11 @@ from datetime import datetime
 
 from .config import (
     COLOR_SCALE, DPI, OUTPUT_PLOT,
-    GRID_RESOLUTION, DISPLAY_STATION_SOURCES,
-    DISPLAY_OBSERVATIONS_ONLY
+    GRID_RESOLUTION, DISPLAY_STATION_SOURCES, DISPLAY_OBSERVATIONS_ONLY,
+    INTERPOLATION_REGION, CRS_WGS84, DISPLAY_COUNTIES,
+    COUNTIES_SHAPEFILE
 )
-from .utils import PL_BOUNDARY_WGS84
+from .utils import PL_BOUNDARY_WGS84, load_region_boundary, VOIVODESHIP_NAMES, is_national_mode
 
 def load_color_scale_advanced():
     """
@@ -72,7 +73,8 @@ def plot_temperature_map(
     output_path: str = None,
     show: bool = True,
     title_suffix: str = "",
-    resolution_km=GRID_RESOLUTION
+    resolution_km=GRID_RESOLUTION,
+    region_name: str = "Polska"
 ):
     """
     Exact visualization style match:
@@ -87,10 +89,18 @@ def plot_temperature_map(
     # Load Data & Scale
     cmap, norm, scale_vmin, scale_vmax = load_color_scale_advanced()
     
-    # Setup Figure Geometry based on Poland's aspect ratio
-    # calculate aspect ratio correction: aspect_deg * cos(mid_lat)
-    pl_bounds = PL_BOUNDARY_WGS84.total_bounds # [minx, miny, maxx, maxy]
-    minx, miny, maxx, maxy = pl_bounds
+    # Setup Figure Geometry based on region boundary
+    region_gdf = load_region_boundary(INTERPOLATION_REGION, CRS_WGS84)
+    region_bounds = region_gdf.total_bounds # [minx, miny, maxx, maxy]
+    minx, miny, maxx, maxy = region_bounds
+    
+    # Add small margin
+    margin_x = (maxx - minx) * 0.02
+    margin_y = (maxy - miny) * 0.02
+    minx -= margin_x
+    maxx += margin_x
+    miny -= margin_y
+    maxy += margin_y
     
     lat_mid = (miny + maxy) / 2
     aspect_true = (maxx - minx) * cos(radians(lat_mid)) / (maxy - miny)
@@ -111,14 +121,29 @@ def plot_temperature_map(
         zorder=1
     )
     
-    # Borders & Neatline
-    # Inner borders
-    PL_BOUNDARY_WGS84.boundary.plot(
+    # Borders & Neatline (draw region boundary)
+    region_gdf.boundary.plot(
         ax=ax,
         edgecolor="#333333",
-        linewidth=1.0,
+        linewidth=1.5,
         zorder=2
     )
+    
+    # County borders in regional mode
+    if not is_national_mode(INTERPOLATION_REGION) and DISPLAY_COUNTIES:
+        if COUNTIES_SHAPEFILE.exists():
+            counties_gdf = gpd.read_file(COUNTIES_SHAPEFILE)
+            canonical_name = VOIVODESHIP_NAMES.get(INTERPOLATION_REGION.lower(), INTERPOLATION_REGION.lower())
+            counties_in_region = counties_gdf[counties_gdf['NAME_1'].str.lower() == canonical_name]
+
+            if not counties_in_region.empty:
+                counties_in_region = counties_in_region.to_crs(CRS_WGS84)
+                counties_in_region.boundary.plot(
+                    ax=ax,
+                    edgecolor="#888888",
+                    linewidth=0.3,
+                    zorder=2
+                )
     
     # Box around extent
     ax.add_patch(Rectangle(
@@ -135,7 +160,8 @@ def plot_temperature_map(
             stations_to_plot = stations_gdf[stations_gdf['source'].isin(DISPLAY_STATION_SOURCES)].copy()
         else:
             stations_to_plot = stations_gdf.copy()
-
+        
+        # Filter out IMGW model points if configured
         if DISPLAY_OBSERVATIONS_ONLY and 'isModel' in stations_to_plot.columns:
             stations_to_plot = stations_to_plot[stations_to_plot['isModel'] != True].copy()
 
@@ -175,7 +201,9 @@ def plot_temperature_map(
         
         dx_pt = 2.5  # shift 2.5 points right
         
-        label_grid_size = 0.25  # degrees
+        # Scale label grid with map extent
+        map_width = maxx - minx
+        label_grid_size = max(0.08, map_width / 40)
         occupied_cells = set()
         
         for idx, row in stations_to_plot.iterrows():
@@ -255,14 +283,14 @@ def plot_temperature_map(
     # Title aligned left
     resolution_km_display = resolution_km / 1000
     ax.set_title(
-        f'Polska • Temperatura powietrza 2 m • {resolution_km_display:g} km\n{utc_now}',
+        f'{region_name} • Temperatura powietrza 2 m • {resolution_km_display:g} km\n{utc_now}',
         loc='left', pad=10, fontsize=12, weight='bold'
     )
     
     # Source footer
     fig.text(
         0.02, 0.01,
-        'Źródła pochodzenia danych obserwacyjnych: IMGW (Instytut Meteorologii i Gospodarki Wodnej)  •  TraxElektronik  •  Netatmo',
+        'Źródła pochodzenia danych obserwacyjnych: IMGW (Instytut Meteorologii i Gospodarki Wodnej)  •  TraxElektronik  •  Netatmo  •  Edwin',
         fontsize=6, color='#444444'
     )
     
@@ -307,8 +335,24 @@ def plot_uncertainty_map(
     title: str = "Prediction Uncertainty"
 ):
     """Uncertainty map."""
-    fig, ax = plt.subplots(figsize=(10, 12))
-    ax.set_position([0.02, 0.03, 0.80, 0.85])
+    region_gdf = load_region_boundary(INTERPOLATION_REGION, CRS_WGS84)
+    region_bounds = region_gdf.total_bounds
+    minx, miny, maxx, maxy = region_bounds
+    
+    margin_x = (maxx - minx) * 0.02
+    margin_y = (maxy - miny) * 0.02
+    minx -= margin_x
+    maxx += margin_x
+    miny -= margin_y
+    maxy += margin_y
+    
+    center_lat = (miny + maxy) / 2
+    aspect_true = (maxx - minx) * cos(radians(center_lat)) / (maxy - miny)
+    
+    FIG_W = 10
+    FIG_H = FIG_W / aspect_true
+    
+    fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
     fig.patch.set_facecolor('#f8f9fa')
     
     # uncertainty colormap
@@ -327,32 +371,29 @@ def plot_uncertainty_map(
         rasterized=True
     )
     
-    # Poland boundary
-    PL_BOUNDARY_WGS84.boundary.plot(ax=ax, edgecolor='#2c3e50', linewidth=2.5)
+    # Region boundary
+    region_gdf.boundary.plot(ax=ax, edgecolor='#2c3e50', linewidth=1.5)
     
-    pl_bounds = PL_BOUNDARY_WGS84.total_bounds
-    ax.set_xlim(pl_bounds[0], pl_bounds[2])
-    ax.set_ylim(pl_bounds[1], pl_bounds[3])
-
-    center_lat = (pl_bounds[1] + pl_bounds[3]) / 2
-    ax.set_aspect(1 / np.cos(np.radians(center_lat)), adjustable='box')
+    ax.set_xlim(minx, maxx)
+    ax.set_ylim(miny, maxy)
+    ax.set_aspect('auto')
     ax.axis('off')
     
     # Title
-    fig.text(0.5, 0.96, title, fontsize=32, fontweight='bold', 
-             ha='center', va='top', color='#2c3e50')
-    
     subtitle = f"Mean: {np.nanmean(uncertainty):.3f}°C, 95th percentile: {np.nanpercentile(uncertainty, 95):.3f}°C"
-    fig.text(0.5, 0.91, subtitle, fontsize=14, ha='center', va='top', 
-            color='#7f8c8d', style='italic')
+    ax.set_title(f"{title}\n{subtitle}", fontsize=14, fontweight='bold', 
+                 color='#2c3e50', pad=10, loc='left')
     
     # Colorbar
-    cax = fig.add_axes([0.85, 0.10, 0.025, 0.75])
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='3%', pad=0.12)
     cbar = fig.colorbar(img, cax=cax)
-    cbar.set_label('Uncertainty (°C)', fontsize=15, color='#2c3e50', weight='bold')
-    cbar.ax.tick_params(labelsize=13, colors='#2c3e50')
+    cbar.set_label('Uncertainty (°C)', fontsize=12, color='#2c3e50', weight='bold')
+    cbar.ax.tick_params(labelsize=10, colors='#2c3e50')
     cbar.outline.set_visible(False)
     
+    plt.tight_layout()
     plt.savefig(output_path, dpi=DPI, bbox_inches='tight', facecolor='#f8f9fa')
     print(f"✓ Uncertainty map saved to: {output_path}")
 

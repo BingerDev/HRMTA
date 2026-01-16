@@ -29,11 +29,19 @@ def geocode_stations(df: pd.DataFrame, debug: bool = False) -> pd.DataFrame:
     print(f"\nGeocoding {len(to_geocode)} stations...")
     success = 0
     
+    # Check if provName column exists
+    has_provname = 'provName' in df.columns
+    
     for idx in tqdm(to_geocode.index, desc="Geocoding"):
         station_name = clean_station_name(df.loc[idx, 'station'])
         source = df.loc[idx, 'source']
-        # Hint province for IMGW to improve accuracy
-        prov_hint = None # could extract from IMGW metadata if available
+        
+        # Use provName for IMGW stations to improve geocoding accuracy
+        prov_hint = None
+        if has_provname and source == 'IMGW':
+            prov_val = df.loc[idx, 'provName']
+            if pd.notna(prov_val) and prov_val:
+                prov_hint = str(prov_val).lower()
             
         coords, status = geocode_station(station_name, province=prov_hint, debug=debug)
         
@@ -209,9 +217,9 @@ def prepare_station_data(df: pd.DataFrame) -> gpd.GeoDataFrame:
     geometry = [Point(lon, lat) for lon, lat in zip(df['lon'], df['lat'])]
     gdf = gpd.GeoDataFrame(df, geometry=geometry, crs=CRS_WGS84)
     
-    # Deduplicate locations (prioritize IMGW over Netatmo PWS if at same spot)
-    # sort by source priority helps keep better stations
-    source_priority = {'IMGW': 1, 'TRAX': 2, 'NETATMO': 3}
+    # Deduplicate locations (prioritize by accuracy: IMGW official, EDWIN precise GPS,
+    # NETATMO has device GPS, TRAX requires manual geocoding)
+    source_priority = {'IMGW': 1, 'EDWIN': 2, 'NETATMO': 3, 'TRAX': 4}
     gdf['priority'] = gdf['source'].map(source_priority).fillna(99)
     gdf = gdf.sort_values('priority')
     

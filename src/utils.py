@@ -53,6 +53,99 @@ def is_in_poland(lat: float, lon: float, tolerance: float = 0) -> bool:
     poly = PL_GEOMETRY_2180.buffer(tolerance) if tolerance else PL_GEOMETRY_2180
     return poly.contains(pt_2180)
 
+# Voivodeship name mapping (dual-language support)
+VOIVODESHIP_NAMES = {
+    # Polish names
+    "dolnośląskie": "dolnośląskie",
+    "kujawsko-pomorskie": "kujawsko-pomorskie",
+    "łódzkie": "łódzkie",
+    "lubelskie": "lubelskie",
+    "lubuskie": "lubuskie",
+    "małopolskie": "małopolskie",
+    "mazowieckie": "mazowieckie",
+    "opolskie": "opolskie",
+    "podkarpackie": "podkarpackie",
+    "podlaskie": "podlaskie",
+    "pomorskie": "pomorskie",
+    "śląskie": "śląskie",
+    "świętokrzyskie": "świętokrzyskie",
+    "warmińsko-mazurskie": "warmińsko-mazurskie",
+    "wielkopolskie": "wielkopolskie",
+    "zachodniopomorskie": "zachodniopomorskie",
+    # English names
+    "lower silesian": "dolnośląskie",
+    "kuyavian-pomeranian": "kujawsko-pomorskie",
+    "lodz": "łódzkie",
+    "lublin": "lubelskie",
+    "lubusz": "lubuskie",
+    "lesser poland": "małopolskie",
+    "masovian": "mazowieckie",
+    "opole": "opolskie",
+    "subcarpathian": "podkarpackie",
+    "podlaskie": "podlaskie",
+    "pomeranian": "pomorskie",
+    "silesian": "śląskie",
+    "holy cross": "świętokrzyskie",
+    "warmian-masurian": "warmińsko-mazurskie",
+    "greater poland": "wielkopolskie",
+    "west pomeranian": "zachodniopomorskie",
+}
+
+def is_national_mode(region_name: str) -> bool:
+    """Check if region is entire Poland."""
+    return region_name.lower() in ("poland", "polska")
+
+def load_region_boundary(region_name: str, crs: str = CRS_WGS84) -> gpd.GeoDataFrame:
+    """Load boundary for a specific region."""
+    if is_national_mode(region_name):
+        return load_poland_boundary(crs)
+    
+    from .config import VOIVODESHIP_SHAPEFILE
+    if not VOIVODESHIP_SHAPEFILE.exists():
+        raise FileNotFoundError(f"Voivodeship shapefile not found: {VOIVODESHIP_SHAPEFILE}")
+    
+    # Normalize region name
+    region_lower = region_name.lower()
+    canonical_name = VOIVODESHIP_NAMES.get(region_lower)
+    
+    if canonical_name is None:
+        available = sorted(set(VOIVODESHIP_NAMES.values()))
+        raise ValueError(f"Region '{region_name}' not found. Available: {available}")
+    
+    voivodeships = gpd.read_file(VOIVODESHIP_SHAPEFILE)
+    match = voivodeships[voivodeships['NAME_1'].str.lower() == canonical_name]
+    
+    if len(match) == 0:
+        raise ValueError(f"Region '{canonical_name}' not found in shapefile.")
+    
+    if match.crs is None:
+        match = match.set_crs(CRS_WGS84)
+    if match.crs.to_string() != crs:
+        match = match.to_crs(crs)
+    
+    return match
+
+def get_region_display_name(region_name: str) -> str:
+    """Get proper display name for a region."""
+    if is_national_mode(region_name):
+        return "Polska"
+    
+    region_lower = region_name.lower()
+    canonical = VOIVODESHIP_NAMES.get(region_lower, region_lower)
+    return canonical.title()
+
+def get_active_geometry(buffered: bool = False):
+    """Get the active region geometry for the current run."""
+    from .config import INTERPOLATION_REGION, REGIONAL_BUFFER_KM
+    
+    region_gdf = load_region_boundary(INTERPOLATION_REGION, CRS_POLAND)
+    geom = region_gdf.unary_union
+    
+    if buffered and not is_national_mode(INTERPOLATION_REGION):
+        geom = geom.buffer(REGIONAL_BUFFER_KM * 1000)  # km to meters
+    
+    return geom
+
 # Geocoding cache
 class GeocodingCache:
     """Simple JSON-based geocoding cache."""
