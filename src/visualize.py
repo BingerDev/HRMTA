@@ -74,7 +74,8 @@ def plot_temperature_map(
     show: bool = True,
     title_suffix: str = "",
     resolution_km=GRID_RESOLUTION,
-    region_name: str = "Polska"
+    region_name: str = "Polska",
+    data_fetch_time: datetime = None
 ):
     """
     Exact visualization style match:
@@ -234,18 +235,26 @@ def plot_temperature_map(
         imgw_obs = stations_gdf[imgw_mask]
         
         if not imgw_obs.empty:
-            tmax_idx = imgw_obs['temp'].idxmax()
-            tmin_idx = imgw_obs['temp'].idxmin()
+            tmax_val = imgw_obs['temp'].max()
+            tmin_val = imgw_obs['temp'].min()
             
-            tmax_val = imgw_obs.loc[tmax_idx, 'temp']
-            tmin_val = imgw_obs.loc[tmin_idx, 'temp']
-            tmax_station = imgw_obs.loc[tmax_idx, 'station'].title() if 'station' in imgw_obs.columns else ''
-            tmin_station = imgw_obs.loc[tmin_idx, 'station'].title() if 'station' in imgw_obs.columns else ''
+            # Finds all stations
+            tmax_stations = imgw_obs[imgw_obs['temp'] == tmax_val]
+            tmin_stations = imgw_obs[imgw_obs['temp'] == tmin_val]
             
-            tmax_prov = imgw_obs.loc[tmax_idx, 'provName'] if 'provName' in imgw_obs.columns else ''
-            tmin_prov = imgw_obs.loc[tmin_idx, 'provName'] if 'provName' in imgw_obs.columns else ''
-            tmax_woj = f"(woj. {tmax_prov.lower()})" if tmax_prov else ''
-            tmin_woj = f"(woj. {tmin_prov.lower()})" if tmin_prov else ''
+            # Build station names string
+            tmax_names = ', '.join(tmax_stations['station'].str.title().tolist()) if 'station' in tmax_stations.columns else ''
+            tmin_names = ', '.join(tmin_stations['station'].str.title().tolist()) if 'station' in tmin_stations.columns else ''
+            
+            # Build voivodeship strings
+            if 'provName' in imgw_obs.columns:
+                tmax_provs = tmax_stations['provName'].dropna().unique()
+                tmin_provs = tmin_stations['provName'].dropna().unique()
+                tmax_woj = ', '.join([f"(woj. {p.lower()})" for p in tmax_provs]) if len(tmax_provs) > 0 else ''
+                tmin_woj = ', '.join([f"(woj. {p.lower()})" for p in tmin_provs]) if len(tmin_provs) > 0 else ''
+            else:
+                tmax_woj = ''
+                tmin_woj = ''
             
             text_x = minx + (maxx - minx) * 0.02
             text_y_tmax = miny + (maxy - miny) * 0.12
@@ -264,7 +273,7 @@ def plot_temperature_map(
             # Tmax
             ax.text(text_x, text_y_tmax, f"{tmax_val:.1f}°C",
                     fontsize=18, color='#FF0000', weight='bold', va='bottom', **extrema_kw)
-            ax.text(text_x, text_y_tmax - name_offset, tmax_station,
+            ax.text(text_x, text_y_tmax - name_offset, tmax_names,
                     fontsize=11, color='#FF0000', weight='bold', va='top', **extrema_kw)
             ax.text(text_x, text_y_tmax - name_offset - woj_offset - (maxy - miny) * 0.012, tmax_woj,
                     fontsize=7, color='#909090', weight='bold', va='top', **extrema_kw)
@@ -272,13 +281,17 @@ def plot_temperature_map(
             # Tmin
             ax.text(text_x, text_y_tmin, f"{tmin_val:.1f}°C",
                     fontsize=18, color='#1A00FF', weight='bold', va='bottom', **extrema_kw)
-            ax.text(text_x, text_y_tmin - name_offset, tmin_station,
+            ax.text(text_x, text_y_tmin - name_offset, tmin_names,
                     fontsize=11, color='#1A00FF', weight='bold', va='top', **extrema_kw)
             ax.text(text_x, text_y_tmin - name_offset - woj_offset - (maxy - miny) * 0.012, tmin_woj,
                     fontsize=7, color='#909090', weight='bold', va='top', **extrema_kw)
 
     # Titles & Footer
-    utc_now = datetime.utcnow().strftime('%Y-%m-%d  %H:%M  UTC')
+    if data_fetch_time is not None:
+        utc_now = data_fetch_time.strftime('%Y-%m-%d  %H:%M  UTC')
+    else:
+        from datetime import timezone
+        utc_now = datetime.now(timezone.utc).strftime('%Y-%m-%d  %H:%M  UTC')
     
     # Title aligned left
     resolution_km_display = resolution_km / 1000

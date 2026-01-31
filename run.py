@@ -14,6 +14,7 @@ from scipy.spatial import cKDTree
 import warnings
 import json
 import gc
+from datetime import datetime, timezone
 
 from src.config import (
     GRID_RESOLUTION, CRS_POLAND, CRS_WGS84,
@@ -140,6 +141,7 @@ def main():
     
     # Data & Features
     raw_data = fetch_all_data()
+    data_fetch_time = datetime.now(timezone.utc)
     if len(raw_data) < 50: return
     
     stations_gdf = prepare_station_data(raw_data)
@@ -276,7 +278,7 @@ def main():
     else:
         vis_stations = stations_gdf
     
-    plot_temperature_map(glon, glat, temp_grid, vis_stations, OUTPUT_PLOT, show=False, title_suffix=f" | {perf_label}", region_name=region_display)
+    plot_temperature_map(glon, glat, temp_grid, vis_stations, OUTPUT_PLOT, show=False, title_suffix=f" | {perf_label}", region_name=region_display, data_fetch_time=data_fetch_time)
     plot_uncertainty_map(glon, glat, unc_grid, output_path=OUTPUT_UNCERTAINTY, title="Ensemble Prediction Uncertainty")
     
     # Visualization data preparation for comparison plots

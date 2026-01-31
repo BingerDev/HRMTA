@@ -152,12 +152,6 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame, lapse_rate: float = None) -> gpd.G
     for i in range(len(gdf)):
         row = gdf.iloc[i]
         
-        # Bypass QC for credible IMGW observations
-        if has_isModel and row['source'] == 'IMGW' and row['isModel'] == False:
-            deviations.append(0.0)
-            trusted_count += 1
-            continue
-        
         # Neighbors (excluding self, which is index 0)
         nbr_indices = indices[i, 1:]
         
@@ -183,9 +177,6 @@ def perform_spatial_qc(gdf: gpd.GeoDataFrame, lapse_rate: float = None) -> gpd.G
             outlier_mask[i] = True
 
     num_outliers = np.sum(outlier_mask)
-    
-    if trusted_count > 0:
-        print(f"   ✅ {trusted_count} credible IMGW observations successfully bypassed QC")
     
     if num_outliers > 0:
         # print some examples
