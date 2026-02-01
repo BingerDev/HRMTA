@@ -127,7 +127,14 @@ def export_temperature_products(
         metrics: Model performance metrics
         export_wgs84: Also export in WGS84 for web mapping
     """
-    suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M')}" if KEEP_RUN_HISTORY else ""
+    if KEEP_RUN_HISTORY:
+        try:
+            folder_ts = datetime.strptime(RUN_OUTPUT_DIR.name, "%Y-%m-%d_%H-%M-%S")
+            suffix = f"_{folder_ts.strftime('%Y%m%d_%H%M')}"
+        except ValueError:
+            suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    else:
+        suffix = ""
     
     # Prepare metadata
     metadata = {
