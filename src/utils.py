@@ -188,8 +188,13 @@ class GeocodingCache:
 _GEOCACHE = GeocodingCache()
 
 # Geocoding
-_GEOLOCATOR_RAW = Nominatim(user_agent="HRMTA/2.0", timeout=10)
-_GEOLOCATOR = RateLimiter(_GEOLOCATOR_RAW.geocode, min_delay_seconds=1.1)
+_GEOLOCATOR_RAW = Nominatim(user_agent="HRMTA/2.0", timeout=15)
+_GEOLOCATOR = RateLimiter(
+    _GEOLOCATOR_RAW.geocode,
+    min_delay_seconds=1.5,   # More breathing room for Nominatim
+    max_retries=5,           # 5 retries instead of default 2
+    error_wait_seconds=3.0,  # Wait 3s between retries on error
+)
 
 def geocode_station(
     station_name: str,
@@ -198,11 +203,11 @@ def geocode_station(
     debug: bool = False
 ) -> Tuple[Optional[Tuple[float, float]], str]:
     """
-    Geocode station name to (lat, lon)
+    Geocode station name to (lat, lon).
     
     Returns:
-        (lat, lon) or None, status_code
-        status_code: 'OK', 'NOT_FOUND', 'OUT_OF_POLAND', 'TIMEOUT', 'ERROR'
+    - (lat, lon) or None, status_code.
+    - status_code: 'OK', 'NOT_FOUND', 'OUT_OF_POLAND', 'TIMEOUT', 'ERROR'.
     """
     # Check cache first
     cache_key = f"{station_name}|{province or 'PL'}"
@@ -246,9 +251,11 @@ def geocode_station(
             
             except (GeocoderTimedOut, GeocoderUnavailable):
                 last_error = "TIMEOUT"
+                # Exponential backoff: 2s, 4s, 8s
+                wait = min(2 ** attempt, 8) + random.uniform(0, 1)
                 if debug:
-                    print(f"[TIMEOUT] {station_name} (attempt {attempt}/{max_retries})")
-                time.sleep(random.uniform(1, 2))
+                    print(f"[TIMEOUT] {station_name} (attempt {attempt}/{max_retries}, wait {wait:.1f}s)")
+                time.sleep(wait)
             
             except Exception as e:
                 last_error = "ERROR"
@@ -299,7 +306,7 @@ def nan_gaussian_filter(data, sigma):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         smoothed_data = gaussian_filter(filled_data, sigma, mode='nearest')
-        smoothed_mask = gaussian_filter(mask, sigma, mode='constant', cval=0)
+        smoothed_mask = gaussian_filter(mask, sigma, mode='nearest')
     
     # Normalize, divide smoothed data by smoothed weights
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -309,3 +316,125 @@ def nan_gaussian_filter(data, sigma):
     output[mask == 0] = np.nan
     
     return output
+
+def lapse_rate_downscale(temp_1km, dem_1km, dem_path, target_res=250,
+                          lapse_rate=0.0065, smooth_sigma=0.5):
+    """
+    DEM-based lapse-rate super-resolution (1km -> target_res).
+    """
+    import rasterio
+    from scipy.ndimage import zoom
+    
+    try:
+        # Read the affine transform from the 1km grid context
+        scale_factor = 1000 / target_res  # e.g., 4x for 250m
+        
+        if scale_factor <= 1:
+            return None  # Already at or below target resolution
+        
+        # Upscale temperature via bilinear interpolation
+        temp_fine = zoom(
+            np.where(np.isfinite(temp_1km), temp_1km, 0),
+            scale_factor, order=1, mode='nearest'
+        )
+        temp_mask = zoom(
+            np.isfinite(temp_1km).astype(float),
+            scale_factor, order=1, mode='nearest'
+        )
+        
+        # Upscale coarse DEM to match
+        dem_1km_filled = np.where(np.isfinite(dem_1km), dem_1km, 0)
+        dem_coarse_up = zoom(dem_1km_filled, scale_factor, order=1, mode='nearest')
+        
+        # Load fine DEM and resample to target_res
+        with rasterio.open(dem_path) as src:
+            from rasterio.enums import Resampling
+            
+            # Calculate output shape matching temp_fine
+            out_shape = temp_fine.shape
+            dem_fine = src.read(
+                1,
+                out_shape=out_shape,
+                resampling=Resampling.bilinear
+            )
+            fine_transform = src.transform * src.transform.scale(
+                src.width / out_shape[1],
+                src.height / out_shape[0]
+            )
+        
+        # Replace nodata
+        if src.nodata is not None:
+            dem_fine = np.where(dem_fine == src.nodata, np.nan, dem_fine)
+        dem_fine = np.where((dem_fine < -500) | (dem_fine > 9000), np.nan, dem_fine)
+        
+        # Apply lapse-rate correction
+        # T_fine = T_coarse_upsampled + lapse_rate * (DEM_coarse_up - DEM_fine)
+        dem_delta = dem_coarse_up - dem_fine
+        valid = np.isfinite(dem_fine) & (temp_mask > 0.5)
+        
+        temp_result = np.full_like(temp_fine, np.nan)
+        temp_result[valid] = temp_fine[valid] + lapse_rate * dem_delta[valid]
+        
+        # Light smoothing to remove step artifacts at 1km boundaries
+        if smooth_sigma > 0:
+            temp_result = nan_gaussian_filter(temp_result, smooth_sigma)
+        
+        print(f"[SuperRes] Downscaled {temp_1km.shape} -> {temp_result.shape} "
+              f"({target_res}m, lapse={lapse_rate:.4f} C/m)")
+        print(f"[SuperRes] DEM delta range: {np.nanmin(dem_delta[valid]):.0f} to "
+              f"{np.nanmax(dem_delta[valid]):.0f}m")
+        
+        return {
+            'temp': temp_result,
+            'dem': dem_fine,
+            'transform': fine_transform,
+            'resolution': target_res,
+        }
+        
+    except Exception as e:
+        print(f"[SuperRes] Failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def compute_solar_elevation(gdf: gpd.GeoDataFrame, utc_time) -> np.ndarray:
+    """
+    Compute solar elevation angle for each point in a GeoDataFrame.
+    """
+    from datetime import datetime, timezone
+    
+    # Ensure WGS84
+    gdf_wgs = gdf.to_crs(CRS_WGS84) if gdf.crs and str(gdf.crs) != CRS_WGS84 else gdf
+    
+    lats = np.array([g.y for g in gdf_wgs.geometry])
+    lons = np.array([g.x for g in gdf_wgs.geometry])
+    
+    # Day of year and fractional hour
+    if utc_time.tzinfo is None:
+        utc_time = utc_time.replace(tzinfo=timezone.utc)
+    
+    doy = utc_time.timetuple().tm_yday
+    hour_utc = utc_time.hour + utc_time.minute / 60.0 + utc_time.second / 3600.0
+    
+    # Solar declination (Spencer, 1971)
+    gamma = 2 * np.pi * (doy - 1) / 365.0
+    decl = (0.006918 - 0.399912 * np.cos(gamma) + 0.070257 * np.sin(gamma)
+            - 0.006758 * np.cos(2 * gamma) + 0.000907 * np.sin(2 * gamma)
+            - 0.002697 * np.cos(3 * gamma) + 0.00148 * np.sin(3 * gamma))
+    
+    # Equation of time (minutes)
+    eqtime = (229.18 * (0.000075 + 0.001868 * np.cos(gamma) - 0.032077 * np.sin(gamma)
+              - 0.014615 * np.cos(2 * gamma) - 0.04089 * np.sin(2 * gamma)))
+    
+    # Solar hour angle
+    time_offset = eqtime + 4.0 * lons  # minutes
+    true_solar_time = hour_utc * 60.0 + time_offset  # minutes
+    hour_angle = np.radians((true_solar_time / 4.0) - 180.0)
+    
+    # Solar elevation
+    lat_rad = np.radians(lats)
+    sin_elev = (np.sin(lat_rad) * np.sin(decl) + 
+                np.cos(lat_rad) * np.cos(decl) * np.cos(hour_angle))
+    elevation = np.degrees(np.arcsin(np.clip(sin_elev, -1, 1)))
+    
+    return elevation

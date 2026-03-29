@@ -11,7 +11,8 @@ import time
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from .config import IMGW_PROVINCES, IMGW_DATA_MODE, TRAX_REGION_IDS, NETATMO_CONFIG, EDWIN_CONFIG
+from .config import (IMGW_PROVINCES, IMGW_DATA_MODE, TRAX_REGION_IDS,
+                     NETATMO_CONFIG, EDWIN_CONFIG, PWS_DEDUP_RADIUS_M)
 from .utils import is_in_poland, clean_temperature
 
 from requests.adapters import HTTPAdapter
@@ -24,10 +25,10 @@ IMGW_HYDRO_URL = "https://danepubliczne.imgw.pl/api/data/hydro/"
 
 def get_imgw_official_coords() -> dict:
     """
-    Fetch official IMGW station coordinates from public API
+    Fetch official IMGW station coordinates from public API.
 
     Returns:
-        dict mapping station_name -> (lat, lon)
+    - dict mapping station_name -> (lat, lon).
     """
     coords = {}
     
@@ -74,10 +75,10 @@ def _get_cached_coords():
 
 def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     """
-    Fetch IMGW data for specified regions
+    Fetch IMGW data for specified regions.
     
     Returns:
-        DataFrame with columns: station, temp, statId, source
+    - DataFrame with columns: station, temp, statId, source.
     """
     if provinces is None:
         provinces = IMGW_PROVINCES
@@ -87,31 +88,38 @@ def fetch_imgw(provinces: List[int] = None) -> pd.DataFrame:
     session = requests.Session()
     
     retries = Retry(
-        total=3, 
-        backoff_factor=2, 
+        total=4,
+        connect=3,
+        read=3,
+        backoff_factor=2,
         status_forcelist=[429, 500, 502, 503, 504]
     )
     adapter = HTTPAdapter(max_retries=retries)
-    
+
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    
+
     session.headers.update({
         'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         'Accept': 'application/json',
         'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8'
     })
-    
+
     for prov in provinces:
-        try:
-            time.sleep(1)
-            response = session.get(IMGW_URL.format(prov=prov), timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            all_data.extend(data)
-            print(f"[IMGW] Province {prov:02d}: {len(data)} stations")
-        except Exception as e:
-            print(f"[IMGW] Province {prov:02d}: ❌ {e}")
+        for attempt in range(3):
+            try:
+                time.sleep(1 if attempt == 0 else 5)
+                response = session.get(IMGW_URL.format(prov=prov), timeout=45)
+                response.raise_for_status()
+                data = response.json()
+                all_data.extend(data)
+                print(f"[IMGW] Province {prov:02d}: {len(data)} stations")
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"[IMGW] Province {prov:02d}: retry {attempt+1}/2 ({type(e).__name__})")
+                else:
+                    print(f"[IMGW] Province {prov:02d}: ❌ {e}")
     
     df = pd.DataFrame(all_data)
     if df.empty:
@@ -195,10 +203,10 @@ def _fetch_trax_region(region_id: int) -> List[Tuple[str, float, int]]:
 
 def fetch_trax(region_ids: List[int] = None) -> pd.DataFrame:
     """
-    Fetch TraxElektronik data
+    Fetch TraxElektronik data.
     
     Returns:
-        DataFrame with columns: station, temp, region, source
+    - DataFrame with columns: station, temp, region, source.
     """
     if region_ids is None:
         region_ids = TRAX_REGION_IDS
@@ -216,10 +224,10 @@ def fetch_trax(region_ids: List[int] = None) -> pd.DataFrame:
 # Netatmo
 def fetch_netatmo() -> pd.DataFrame:
     """
-    Fetch Netatmo data
+    Fetch Netatmo data.
     
     Returns:
-        DataFrame with columns: station, temp, lat, lon, source
+    - DataFrame with columns: station, temp, lat, lon, source.
     """
     url = "https://api.netatmo.com/api/getpublicdata"
     params = {
@@ -299,7 +307,7 @@ def fetch_edwin() -> pd.DataFrame:
     Fetch Edwin data using concurrent requests.
     
     Returns:
-        DataFrame with columns: station, temp, lat, lon, source
+    - DataFrame with columns: station, temp, lat, lon, source.
     """
     api_base = EDWIN_CONFIG['api_base']
     
@@ -374,17 +382,74 @@ def fetch_edwin() -> pd.DataFrame:
     return df_final
 
 # Combined fetching
+
+import numpy as np
+from scipy.spatial import cKDTree
+
+def _deduplicate_stations(df, radius_m=100):
+    """
+    Remove duplicate stations across sources using spatial proximity.
+    
+    When two stations from different networks are within `radius_m` of each
+    other, keep the one from the higher-priority source.
+    
+    Priority: IMGW > TRAX > EDWIN > NETATMO
+    """
+    if len(df) < 2:
+        return df
+    
+    has_coords = df.dropna(subset=['lat', 'lon']).copy()
+    no_coords = df[df['lat'].isna() | df['lon'].isna()]
+    
+    if len(has_coords) < 2:
+        return df
+    
+    SOURCE_PRIORITY = {
+        'IMGW': 0, 'TRAX': 1, 'EDWIN': 2,
+        'NETATMO': 3,
+    }
+    
+    lats = has_coords['lat'].values.astype(float)
+    lons = has_coords['lon'].values.astype(float)
+    
+    # Approximate meter conversion at Poland's mean latitude (~52°N)
+    cos52 = np.cos(np.radians(52.0))
+    x = lons * 111_320 * cos52
+    y = lats * 110_540
+    
+    tree = cKDTree(np.column_stack([x, y]))
+    pairs = tree.query_pairs(radius_m)
+    
+    to_remove = set()
+    for i, j in pairs:
+        src_i = SOURCE_PRIORITY.get(has_coords.iloc[i]['source'], 99)
+        src_j = SOURCE_PRIORITY.get(has_coords.iloc[j]['source'], 99)
+        if src_i <= src_j:
+            to_remove.add(has_coords.index[j])
+        else:
+            to_remove.add(has_coords.index[i])
+    
+    if to_remove:
+        print(f"[DEDUP] Removed {len(to_remove)} duplicate stations "
+              f"(within {radius_m}m across sources)")
+        has_coords = has_coords.drop(index=to_remove)
+    
+    return pd.concat([has_coords, no_coords], ignore_index=True)
+
 def fetch_all_data() -> pd.DataFrame:
     """
-    Fetch data from all sources and combine
+    Fetch data from all sources and combine.
+    
+    Sources (in priority order):
+    - IMGW, Trax, Edwin, Netatmo.
     
     Returns:
-        DataFrame with columns: station, temp, lat, lon, source
-        (lat/lon are None for IMGW/TRAX until geocoded)
+    - DataFrame with columns: station, temp, lat, lon, source.
+    - (lat/lon are None for IMGW/TRAX until geocoded).
     """
     print("Fetching data from all sources...")
     
-    # Fetch from each source
+    # Core sources
     imgw_df = fetch_imgw()
     trax_df = fetch_trax()
     netatmo_df = fetch_netatmo()
@@ -396,11 +461,11 @@ def fetch_all_data() -> pd.DataFrame:
             df['lat'] = None
             df['lon'] = None
     
-    # combine all
     all_dfs = [df for df in [imgw_df, trax_df, netatmo_df, edwin_df] if not df.empty]
-    
+
+    # Combine
     if not all_dfs:
-        print("⚠️  No data fetched from any source!")
+        print("\u26a0\ufe0f  No data fetched from any source!")
         return pd.DataFrame(columns=["station", "temp", "lat", "lon", "source"])
     
     combined = pd.concat(all_dfs, ignore_index=True)
@@ -410,12 +475,16 @@ def fetch_all_data() -> pd.DataFrame:
     extra_cols = [c for c in ["isModel", "provName"] if c in combined.columns]
     combined = combined[core_cols + extra_cols]
     
+    # Cross-source deduplication
+    n_before = len(combined)
+    combined = _deduplicate_stations(combined, radius_m=PWS_DEDUP_RADIUS_M)
+    
     # Report isModel stats if available
     if 'isModel' in combined.columns:
         credible_count = (combined['isModel'] == False).sum()
         print(f"[IMGW] {credible_count} credible IMGW observations are available for dynamic lapse rate calculation.")
     
-    print(f"Total stations fetched: {len(combined)}")
+    print(f"Total stations fetched: {len(combined)} (before dedup: {n_before})")
     print(combined.groupby("source").size())
 
     return combined

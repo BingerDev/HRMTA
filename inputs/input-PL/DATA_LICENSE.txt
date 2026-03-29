@@ -1,6 +1,6 @@
 DATASET ATTRIBUTION AND LICENSING
 
-This software includes pre-processed snippets of the defined environmental rasters in the models dataset. 
+This software includes pre-processed snippets of the defined environmental rasters in the models dataset.
 These rasters are distributed under open licenses that allow redistribution with attribution.
 
 1. LandScan HD (Oak Ridge National Laboratory)
@@ -10,22 +10,37 @@ These rasters are distributed under open licenses that allow redistribution with
 2. Global Human Settlement Layer
    Primary source of the data is European Commission, Joint Research Centre shared under CC BY 4.0 license.
    Schiavina M., Melchiorri M., Pesaresi M. (2022): GHSL Data Package 2022.
+   Datasets used:
+     - GHS-BUILT-S: Human settlement fraction
+     - GHS-BUILT-H: Building height
 
 3. Copernicus DEM
    Data provided thanks to European Space Agency and shared under Copernicus WorldDEM-30 license.
    © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.
+   DEM-derived rasters (TPI, SVF, CAP anomaly, HAND, slope, aspect, curvature, roughness) are computed from this dataset.
 
-4. Copernicus Land Monitoring Service
+4. ESA WorldCover
+   Data provided by European Space Agency under CC BY 4.0 license.
+   Zanaga, D., et al. (2022): ESA WorldCover 10m 2021 v200.
+   Datasets used:
+     - Land cover classification (10m)
+     - Cropland fraction (derived)
+
+5. Copernicus Land Monitoring Service
    Data by European Environment Agency with full, free and open access.
    Datasets used:
-     - CORINE Land Cover 2018
-     - High Resolution Layer: Tree Cover Density 2021
-     - Water Bodies 2020 (300m)
+     - High Resolution Layer: Tree Cover Density
+     - High Resolution Layer: Imperviousness Density
+     - High Resolution Layer: Water and Wetness
    Data produced thanks to Copernicus data and information funded by the European Union - EU-Copernicus program.
 
-5. ECOSTRESS Land Surface Temperature
-   Provider of the data is NASA / JPL-Caltech. License is NASA Open Data Policy.
-   Data provided by NASA/JPL ECOSTRESS mission.
+6. Meta / World Resources Institute Global Canopy Height
+   Being served under Creative Commons Attribution 4.0 International (CC BY 4.0) license.
+   Tolan, J., et al. (2024): Very high resolution canopy height maps from Meta and WRI.
 
-Users of HRMTA must retain this attribution file when redistributing the 
+7. Landsat Land Surface Temperature
+   Data provided by USGS / NASA under open data policy with free and unrestricted access.
+   Summer nighttime LST climatology derived from Landsat 8 and Landsat 9 thermal bands.
+
+Users of HRMTA must retain this attribution file when redistributing the
 environmental dataset.

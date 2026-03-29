@@ -7,14 +7,14 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 def evaluate_predictions(y_true, y_pred) -> dict:
     """
-    Calculate evaluation metrics
+    Calculate evaluation metrics.
     
     Args:
-        y_true: Ground truth (numpy array or pandas series)
-        y_pred: Predictions (numpy array or pandas series)
+    - y_true: Ground truth (numpy array or pandas series).
+    - y_pred: Predictions (numpy array or pandas series).
     
     Returns:
-        dictionary with MAE, RMSE, R², and bias
+    - dictionary with MAE, RMSE, R², and bias.
     """
     # Convert to numpy arrays if pandas series/dataframe
     if hasattr(y_true, 'values'):
@@ -67,10 +67,10 @@ def compare_models(
     model_names: tuple = ("Simple Kriging", "Hybrid Model")
 ) -> pd.DataFrame:
     """
-    Compare two models on the same test set
+    Compare two models on the same test set.
     
     Returns:
-        DataFrame with metrics for both models and improvement percentages
+    - DataFrame with metrics for both models and improvement percentages.
     """
     # Calculate metrics for both
     metrics_baseline = evaluate_predictions(y_true, pred_baseline)

@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple
 import warnings
 
 from .config import (
-    RASTER_FILES, CRS_POLAND, CRS_WGS84,
+    RASTER_FILES, DATA_TIER, CRS_POLAND, CRS_WGS84,
     EXTRACT_TERRAIN_DERIVATIVES, TERRAIN_WINDOW_SIZES,
     USE_SPATIAL_LAG_FEATURES, SPATIAL_LAG_NEIGHBORS
 )
@@ -32,12 +32,12 @@ class RasterFeatureExtractor:
     def load_rasters(self):
         """Load all available rasters"""
         print("\nLoading raster data...")
-        
+
         for name, path in RASTER_FILES.items():
             if not path.exists():
                 print(f"   ⚠️  Skipping {name}: file not found")
                 continue
-            
+
             try:
                 with rasterio.open(path) as src:
                     self.rasters[name] = src.read(1)
@@ -45,35 +45,80 @@ class RasterFeatureExtractor:
                     self.crs_list[name] = src.crs
                     self.nodata_values[name] = src.nodata
                     self.bounds[name] = src.bounds
-                    
+
                     print(f"   ✓ {name}: {self.rasters[name].shape}, "
                           f"CRS: {src.crs}, "
                           f"Bounds: ({src.bounds.left:.2f}, {src.bounds.bottom:.2f}) to "
                           f"({src.bounds.right:.2f}, {src.bounds.top:.2f})")
             except Exception as e:
                 print(f"   ❌ Failed to load {name}: {e}")
+
+        # Validate loaded rasters against configured tier
+        expected = set(RASTER_FILES.keys())
+        loaded = set(self.rasters.keys())
+        missing = expected - loaded
+        if "dem" not in loaded:
+            raise FileNotFoundError(
+                "DEM raster not found, and the model cannot run without elevation data.\n"
+                f"   Expected: {RASTER_FILES.get('dem', 'inputs/input-PL/copernicus_dem.tif')}\n"
+                "   Download the input dataset for your DATA_TIER setting, please see README."
+            )
+        if missing:
+            print(f"\n   ⚠️  WARNING: {len(missing)}/{len(expected)} rasters missing "
+                  f"for DATA_TIER='{DATA_TIER}': {', '.join(sorted(missing))}")
+            print(f"   Download the correct dataset for your tier: see README.")
+        else:
+            print(f"\n   All {len(loaded)} rasters loaded successfully.")
+
+    def release(self):
+        """Release raster arrays to free memory.
+
+        Call after all feature extraction is complete. The raster data
+        (~3 GB for full tier) is only needed during extract_at_points()
+        and compute_distance_features(). Releasing it before downstream
+        operations (NWP interpolation, Kriging) prevents memory pressure.
+        """
+        import gc
+        n_rasters = len(self.rasters)
+        mem_mb = sum(r.nbytes for r in self.rasters.values()) / 1e6
+        self.rasters.clear()
+        gc.collect()
+        print(f"   Released {n_rasters} rasters ({mem_mb:.0f} MB)")
     
-    def extract_at_points(self, gdf: gpd.GeoDataFrame, raster_name: str, debug: bool = False) -> np.ndarray:
-        """Extract raster values at point locations with detailed debugging"""
+    def _is_valid_pixel(self, val, nodata):
+        """Check if a raster pixel value is valid (not nodata/NaN/sentinel)."""
+        if nodata is not None and val == nodata:
+            return False
+        if np.isnan(val):
+            return False
+        if val < -9000 or val > 1e6:
+            return False
+        return True
+
+    def extract_at_points(self, gdf: gpd.GeoDataFrame, raster_name: str,
+                          debug: bool = False, bilinear: bool = False) -> np.ndarray:
+        """Extract raster values at point locations.
+
+        Args:
+        - bilinear: If True, use bilinear interpolation instead of nearest-
+        neighbor. Eliminates rectangular block artifacts when sampling
+        coarse rasters (5-7km) at high grid resolution (100m).
+        """
         if raster_name not in self.rasters:
             return np.full(len(gdf), np.nan)
-        
+
         raster = self.rasters[raster_name]
         transform = self.transforms[raster_name]
         raster_crs = self.crs_list[raster_name]
         nodata = self.nodata_values[raster_name]
         bounds = self.bounds[raster_name]
-        
+
         # Ensure GeoDataFrame is in the same CRS as raster
         if gdf.crs != raster_crs:
             gdf_reproj = gdf.to_crs(raster_crs)
         else:
             gdf_reproj = gdf
-        
-        values = []
-        in_bounds_count = 0
-        valid_value_count = 0
-        
+
         # sample first few points (debug)
         if debug and len(gdf_reproj) > 0:
             first_geom = gdf_reproj.geometry.iloc[0]
@@ -81,40 +126,99 @@ class RasterFeatureExtractor:
             print(f"     First point: ({first_geom.x:.4f}, {first_geom.y:.4f})")
             print(f"     Raster bounds: ({bounds.left:.4f}, {bounds.bottom:.4f}) to ({bounds.right:.4f}, {bounds.top:.4f})")
             print(f"     Raster shape: {raster.shape}")
-        
+
+        # --- Vectorized bilinear path (for dense grids on coarse rasters) ---
+        if bilinear:
+            x_pts = np.array([g.x for g in gdf_reproj.geometry])
+            y_pts = np.array([g.y for g in gdf_reproj.geometry])
+
+            # Convert coordinates to continuous row/col (sub-pixel precision)
+            inv = ~transform  # inverse affine
+            col_f = inv.a * x_pts + inv.b * y_pts + inv.c
+            row_f = inv.d * x_pts + inv.e * y_pts + inv.f
+
+            # Pixel centers are at integer + 0.5 in rasterio convention;
+            # shift so that pixel center = integer index
+            col_f -= 0.5
+            row_f -= 0.5
+
+            nrows, ncols = raster.shape
+            values = np.full(len(gdf), np.nan)
+
+            # Bounds check
+            in_bounds = (
+                (col_f >= 0) & (col_f < ncols - 1) &
+                (row_f >= 0) & (row_f < nrows - 1)
+            )
+
+            r0 = np.floor(row_f[in_bounds]).astype(int)
+            c0 = np.floor(col_f[in_bounds]).astype(int)
+            dr = row_f[in_bounds] - r0
+            dc = col_f[in_bounds] - c0
+
+            # Clamp to valid range (edge pixels)
+            r1 = np.clip(r0 + 1, 0, nrows - 1)
+            c1 = np.clip(c0 + 1, 0, ncols - 1)
+
+            # Four corner values
+            v00 = raster[r0, c0].astype(np.float64)
+            v01 = raster[r0, c1].astype(np.float64)
+            v10 = raster[r1, c0].astype(np.float64)
+            v11 = raster[r1, c1].astype(np.float64)
+
+            # Bilinear blend
+            interp = (
+                v00 * (1 - dr) * (1 - dc) +
+                v01 * (1 - dr) * dc +
+                v10 * dr * (1 - dc) +
+                v11 * dr * dc
+            )
+
+            # Invalidate where any corner is nodata
+            corners = np.stack([v00, v01, v10, v11])
+            invalid_corner = np.isnan(corners).any(axis=0)
+            if nodata is not None:
+                invalid_corner |= (corners == nodata).any(axis=0)
+            invalid_corner |= (corners < -9000).any(axis=0) | (corners > 1e6).any(axis=0)
+            interp[invalid_corner] = np.nan
+
+            values[in_bounds] = interp
+
+            if debug:
+                valid_n = int(np.isfinite(values).sum())
+                print(f"     Bilinear: {valid_n}/{len(gdf)} valid")
+
+            return values
+
+        # --- Original nearest-neighbor path (for stations) ---
+        values = []
+        in_bounds_count = 0
+        valid_value_count = 0
+
         for idx, geom in enumerate(gdf_reproj.geometry):
             # check if point is within raster bounds
-            if not (bounds.left <= geom.x <= bounds.right and 
+            if not (bounds.left <= geom.x <= bounds.right and
                     bounds.bottom <= geom.y <= bounds.top):
                 values.append(np.nan)
                 continue
-            
+
             in_bounds_count += 1
-            
+
             try:
                 # get row/col
                 row_float, col_float = rowcol(transform, geom.x, geom.y)
                 row = int(row_float)
                 col = int(col_float)
-                
+
                 # debug first few
                 if debug and idx < 3:
                     print(f"     Point {idx}: ({geom.x:.4f}, {geom.y:.4f}) -> row={row}, col={col}")
-                
+
                 # check array bounds
                 if 0 <= row < raster.shape[0] and 0 <= col < raster.shape[1]:
                     val = float(raster[row, col])
-                    
-                    # check for nodata
-                    is_valid = True
-                    if nodata is not None and val == nodata:
-                        is_valid = False
-                    elif np.isnan(val):
-                        is_valid = False
-                    elif val < -9000 or val > 1e6:
-                        is_valid = False
-                    
-                    if is_valid:
+
+                    if self._is_valid_pixel(val, nodata):
                         valid_value_count += 1
                         values.append(val)
                         if debug and idx < 3:
@@ -131,26 +235,37 @@ class RasterFeatureExtractor:
                 values.append(np.nan)
                 if debug and idx < 3:
                     print(f"       -> ERROR: {e}")
-        
+
         if debug:
             print(f"     In bounds: {in_bounds_count}/{len(gdf)}")
             print(f"     Valid values: {valid_value_count}/{len(gdf)}")
-        
+
         return np.array(values)
     
-    def extract_all_basic_features(self, gdf: gpd.GeoDataFrame, debug: bool = True) -> pd.DataFrame:
-        """Extract all basic raster features"""
+    def extract_all_basic_features(self, gdf: gpd.GeoDataFrame, debug: bool = True,
+                                    grid_resolution_m: float = 0) -> pd.DataFrame:
+        """Extract all basic raster features.
+
+        Args:
+        - grid_resolution_m: Prediction grid resolution in meters.
+        """
         print("\nExtracting basic raster features...")
-        
+
         features = pd.DataFrame(index=gdf.index)
-        
+        use_bilinear = grid_resolution_m > 0
+        categorical_rasters = {'land_cover'}
+
         for i, raster_name in enumerate(self.rasters.keys()):
-            # debug first raster in detail
-            values = self.extract_at_points(gdf, raster_name, debug=(i == 0 and debug))
+            bilinear = use_bilinear and raster_name not in categorical_rasters
+            values = self.extract_at_points(gdf, raster_name,
+                                            debug=(i == 0 and debug),
+                                            bilinear=bilinear)
             features[raster_name] = values
             valid_pct = 100 * (~np.isnan(values)).sum() / len(values)
-            print(f"   {raster_name:15s}: {valid_pct:5.1f}% valid ({(~np.isnan(values)).sum()}/{len(values)})")
-        
+            interp_tag = " (bilinear)" if bilinear else (" (nearest)" if use_bilinear else "")
+            print(f"   {raster_name:15s}: {valid_pct:5.1f}% valid "
+                  f"({(~np.isnan(values)).sum()}/{len(values)}){interp_tag}")
+
         return features
 
 class TerrainAnalyzer:
@@ -196,46 +311,48 @@ class TerrainAnalyzer:
     
     def compute_tpi(self, window_size: int = 9) -> np.ndarray:
         """
-        Topographic Position Index calculation
+        Topographic Position Index calculation.
+        
+        Uses NaN-aware uniform_filter (vectorized C code, ~1000x faster than generic_filter).
         """
-        # use nanmean-like behavior
-        from scipy.ndimage import generic_filter
+        from scipy.ndimage import uniform_filter
         
-        def nan_mean(values):
-            """Mean ignoring NaN"""
-            valid = values[~np.isnan(values)]
-            return valid.mean() if len(valid) > 0 else np.nan
+        valid_mask = ~np.isnan(self.dem)
+        dem_filled = np.where(valid_mask, self.dem, 0.0)
         
-        # compute local mean elevation
-        mean_elevation = generic_filter(
-            self.dem,
-            nan_mean,
-            size=window_size,
-            mode='constant',
-            cval=np.nan
-        )
+        # Weighted mean: sum(values) / sum(weights) where weight=1 for valid, 0 for NaN
+        sum_vals = uniform_filter(dem_filled, size=window_size, mode='constant', cval=0.0)
+        sum_weights = uniform_filter(valid_mask.astype(np.float32), size=window_size, mode='constant', cval=0.0)
+        
+        sum_weights = np.maximum(sum_weights, 1e-8)
+        mean_elevation = sum_vals / sum_weights
         
         tpi = self.dem - mean_elevation
+        tpi[~valid_mask] = np.nan
         return tpi
-    
+
     def compute_roughness(self, window_size: int = 9) -> np.ndarray:
         """
-        Terrain roughness (std dev of elevation) calculation
+        Terrain roughness (std dev of elevation) calculation.
+        
+        Uses NaN-aware uniform_filter for both mean and mean-of-squares,
+        then std = sqrt(E[x²] - E[x]²). Vectorized C code, ~1000x faster.
         """
-        from scipy.ndimage import generic_filter
+        from scipy.ndimage import uniform_filter
         
-        def nan_std(values):
-            """Std dev ignoring NaN"""
-            valid = values[~np.isnan(values)]
-            return valid.std() if len(valid) > 1 else 0.0
+        valid_mask = ~np.isnan(self.dem)
+        dem_filled = np.where(valid_mask, self.dem, 0.0)
+        dem_sq = dem_filled ** 2
         
-        roughness = generic_filter(
-            self.dem,
-            nan_std,
-            size=window_size,
-            mode='constant',
-            cval=np.nan
-        )
+        weights = uniform_filter(valid_mask.astype(np.float32), size=window_size, mode='constant', cval=0.0)
+        weights = np.maximum(weights, 1e-8)
+        
+        mean_val = uniform_filter(dem_filled, size=window_size, mode='constant', cval=0.0) / weights
+        mean_sq = uniform_filter(dem_sq, size=window_size, mode='constant', cval=0.0) / weights
+        
+        variance = np.maximum(mean_sq - mean_val ** 2, 0.0)  # Clamp numerical noise
+        roughness = np.sqrt(variance)
+        roughness[~valid_mask] = np.nan
         
         return roughness
 
@@ -387,12 +504,63 @@ def compute_distance_features(gdf: gpd.GeoDataFrame, extractor: RasterFeatureExt
     # Convert to projected CRS for distance calculations
     gdf_proj = gdf.to_crs(CRS_POLAND) if gdf.crs != CRS_POLAND else gdf
     
-    # Distance to coast (Baltic Sea - approximate as northern boundary)
+    # Distance to coast / water bodies
+    # Uses the water raster + Euclidean Distance Transform for physically
+    # realistic, smooth distance to nearest water pixel. Eliminates the
+    # linear artifact from the old Y-coordinate proxy (coast_y = 600000).
     if DISTANCE_FEATURES.get('coast', False):
-        y_coords = np.array([geom.y for geom in gdf_proj.geometry])
-        coast_y = 600000  # approximate southern coast of Baltic
-        features['dist_coast'] = np.maximum(coast_y - y_coords, 0) / 1000  # km
-        print(f"   ✓ Distance to coast")
+        coast_computed = False
+        
+        if extractor and 'water' in extractor.rasters:
+            water = extractor.rasters['water']
+            water_transform = extractor.transforms['water']
+            water_crs = extractor.crs_list['water']
+            
+            # Water mask: any pixel with water presence > 0
+            water_data = np.where(np.isfinite(water), water, 0)
+            water_mask = water_data > 0
+            
+            if water_mask.any():
+                from scipy.ndimage import distance_transform_edt
+                
+                # EDT on land mask with anisotropic pixel sizes
+                land_mask = ~water_mask
+                water_crs_obj = extractor.crs_list['water']
+                if water_crs_obj.is_projected:
+                    # Projected CRS (e.g. EPSG:2180): pixel sizes in meters
+                    pixel_size_y_km = abs(water_transform[4]) / 1000.0
+                    pixel_size_x_km = abs(water_transform[0]) / 1000.0
+                else:
+                    # Geographic CRS (WGS84): pixel sizes in degrees
+                    pixel_size_y_km = abs(water_transform[4]) * 111.0
+                    pixel_size_x_km = abs(water_transform[0]) * 111.0 * np.cos(np.radians(52.0))
+                
+                dist_km = distance_transform_edt(
+                    land_mask, 
+                    sampling=[pixel_size_y_km, pixel_size_x_km]
+                )
+                
+                # Sample distance field at point locations
+                gdf_water = gdf.to_crs(water_crs) if gdf.crs != water_crs else gdf
+                x_pts = np.array([g.x for g in gdf_water.geometry])
+                y_pts = np.array([g.y for g in gdf_water.geometry])
+                
+                rows, cols = rowcol(water_transform, x_pts, y_pts)
+                rows = np.clip(np.asarray(rows), 0, water.shape[0] - 1)
+                cols = np.clip(np.asarray(cols), 0, water.shape[1] - 1)
+                
+                features['dist_coast'] = dist_km[rows, cols]
+                n_water = water_mask.sum()
+                print(f"   ✓ Distance to coast (EDT on {n_water} water pixels, "
+                      f"range: {features['dist_coast'].min():.1f}–{features['dist_coast'].max():.1f} km)")
+                coast_computed = True
+        
+        if not coast_computed:
+            # Fallback: Y-coordinate proxy (original method)
+            y_coords = np.array([geom.y for geom in gdf_proj.geometry])
+            coast_y = 600000
+            features['dist_coast'] = (coast_y - y_coords) / 1000
+            print(f"   ✓ Distance to coast (Y-proxy fallback)")
     
     # Distance to mountains (high elevation areas)
     if DISTANCE_FEATURES.get('mountains', False) and extractor and 'dem' in extractor.rasters:
@@ -500,7 +668,10 @@ def engineer_all_features(gdf: gpd.GeoDataFrame) -> Tuple[gpd.GeoDataFrame, List
     
     # Distance features
     distance_features = compute_distance_features(gdf, extractor)
-    
+
+    # Release raster memory
+    extractor.release()
+
     # Combine base features first
     base_features = pd.concat([
         basic_features,

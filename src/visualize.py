@@ -20,50 +20,91 @@ from .config import (
     COLOR_SCALE, DPI, OUTPUT_PLOT,
     GRID_RESOLUTION, DISPLAY_STATION_SOURCES, DISPLAY_OBSERVATIONS_ONLY,
     INTERPOLATION_REGION, CRS_WGS84, DISPLAY_COUNTIES,
-    COUNTIES_SHAPEFILE
+    COUNTIES_SHAPEFILE, VOIVODESHIP_SHAPEFILE,
+    DISPLAY_CONTOURS,
+    CONTOUR_INTERVAL, DISPLAY_CLEAN_MODE
 )
 from .utils import PL_BOUNDARY_WGS84, load_region_boundary, VOIVODESHIP_NAMES, is_national_mode
 
-def load_color_scale_advanced():
+def load_color_scale_advanced(data_range=None):
     """
-    Load color scale as a discrete ListedColormap with BoundaryNorm.
+    Load color scale from CSV control points with sub-degree resolution.
     """
+    _SUBS_PER_BAND = 2
+    _INTRA_BLEND = 0.4
+
     if not COLOR_SCALE.exists():
         print(f"⚠️  Color scale not found: {COLOR_SCALE}")
-        # Fallback to standard matplotlib
         cmap = plt.cm.RdYlBu_r
         norm = Normalize(vmin=-40, vmax=40)
         return cmap, norm, -40, 40
-    
+
     try:
         df = pd.read_csv(COLOR_SCALE).sort_values("value")
-        
-        if 'value' in df.columns and 'color' in df.columns:
-            # Extract bounds and hex colors
-            bounds = df['value'].to_numpy()
-            colors_hex = df['color'].values
-            
-            # Convert to RGB list
-            colors_rgb = [mcolors.to_rgb(c) for c in colors_hex]
-            
-            # Create Discrete Colormap and BoundaryNorm
-            # note: listed colormap needs N colors, boundaries need N+1 points usually,
-            # but BoundaryNorm with clip=True handles mapping values to specific bins.
-            cmap = ListedColormap(colors_rgb, name="csv_scale")
-            norm = BoundaryNorm(bounds, cmap.N, clip=True)
-            
-            vmin = bounds.min()
-            vmax = bounds.max()
-            
-            print(f"✓ Loaded discrete color scale: {vmin}°C to {vmax}°C")
-            return cmap, norm, vmin, vmax
-        else:
+
+        if 'value' not in df.columns or 'color' not in df.columns:
             print("⚠️  Invalid color scale format")
             return plt.cm.RdYlBu_r, Normalize(vmin=-40, vmax=40), -40, 40
-            
+
+        temps = df['value'].to_numpy(dtype=float)
+        colors_rgb = [np.array(mcolors.to_rgb(c)) for c in df['color'].values]
+
+        # Clip to data range with margin
+        if data_range is not None:
+            margin = 3.0
+            clip_lo = max(temps[0], np.floor(data_range[0] - margin))
+            clip_hi = min(temps[-1], np.ceil(data_range[1] + margin))
+        else:
+            clip_lo, clip_hi = temps[0], temps[-1]
+
+        # Build sub-bin colors
+        all_bounds = []
+        all_colors = []
+
+        for i in range(len(temps) - 1):
+            t_lo, t_hi = temps[i], temps[i + 1]
+            c_lo, c_hi = colors_rgb[i], colors_rgb[i + 1]
+            band_w = t_hi - t_lo
+
+            if t_hi <= clip_lo or t_lo >= clip_hi:
+                continue
+
+            for s in range(_SUBS_PER_BAND):
+                sub_t = t_lo + s * band_w / _SUBS_PER_BAND
+                if sub_t < clip_lo or sub_t >= clip_hi:
+                    continue
+
+                # Blend toward next band, limited by _INTRA_BLEND
+                frac = (s / _SUBS_PER_BAND) * _INTRA_BLEND
+                color = tuple(c_lo + frac * (c_hi - c_lo))
+
+                all_bounds.append(sub_t)
+                all_colors.append(color)
+
+        all_bounds.append(clip_hi)
+
+        if len(all_colors) < 2:
+            return plt.cm.RdYlBu_r, Normalize(vmin=clip_lo, vmax=clip_hi), clip_lo, clip_hi
+
+        bounds = np.array(all_bounds)
+        cmap_fine = ListedColormap(all_colors, name="hrmta_fine")
+        norm = BoundaryNorm(bounds, cmap_fine.N, clip=True)
+
+        bin_w = np.median(np.diff(bounds))
+        print(f"✓ Color scale: {clip_lo:.0f}°C to {clip_hi:.0f}°C "
+              f"({len(all_colors)} bins, ~{bin_w:.1f}°C step)")
+        return cmap_fine, norm, clip_lo, clip_hi
+
     except Exception as e:
         print(f"⚠️  Error loading color scale: {e}")
         return plt.cm.RdYlBu_r, Normalize(vmin=-40, vmax=40), -40, 40
+
+# Station marker sizes by source accuracy tier
+_SOURCE_MARKER_SIZES = {
+    'IMGW': 22, 'EDWIN': 16, 'TRAX': 12,
+    'NETATMO': 5,
+}
+_DEFAULT_MARKER_SIZE = 8
 
 def plot_temperature_map(
     grid_lon: np.ndarray,
@@ -87,7 +128,7 @@ def plot_temperature_map(
     if output_path is None:
         output_path = OUTPUT_PLOT
 
-    # Load Data & Scale
+    # Load data & scale
     cmap, norm, scale_vmin, scale_vmax = load_color_scale_advanced()
     
     # Setup Figure Geometry based on region boundary
@@ -112,38 +153,65 @@ def plot_temperature_map(
     fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
     
     # Plot Raster
-    # using pcolormesh to support non-rectilinear grids if necessary 
     img = ax.pcolormesh(
         grid_lon, grid_lat, temperature,
         cmap=cmap,
         norm=norm,
-        shading='nearest', # Equivalent to interpolation='nearest'
+        shading='nearest',
         rasterized=True,
         zorder=1
     )
-    
-    # Borders & Neatline (draw region boundary)
-    region_gdf.boundary.plot(
-        ax=ax,
-        edgecolor="#333333",
-        linewidth=1.5,
-        zorder=2
-    )
-    
-    # County borders in regional mode
-    if not is_national_mode(INTERPOLATION_REGION) and DISPLAY_COUNTIES:
-        if COUNTIES_SHAPEFILE.exists():
-            counties_gdf = gpd.read_file(COUNTIES_SHAPEFILE)
-            canonical_name = VOIVODESHIP_NAMES.get(INTERPOLATION_REGION.lower(), INTERPOLATION_REGION.lower())
-            counties_in_region = counties_gdf[counties_gdf['NAME_1'].str.lower() == canonical_name]
 
+    # Isotherm contours
+    if DISPLAY_CONTOURS:
+        temp_masked = np.ma.masked_invalid(temperature)
+        data_min = float(np.nanmin(temperature))
+        data_max = float(np.nanmax(temperature))
+        contour_levels = np.arange(
+            np.floor(data_min),
+            np.ceil(data_max) + 0.1,
+            CONTOUR_INTERVAL
+        )
+        ax.contour(
+            grid_lon, grid_lat, temp_masked,
+            levels=contour_levels,
+            colors='#222222', linewidths=0.25, alpha=0.35,
+            zorder=1.5
+        )
+
+    # Borders & Neatline
+    if is_national_mode(INTERPOLATION_REGION):
+        # National: country outline (bold) + voivodeships (medium) + counties (fine)
+        region_gdf.boundary.plot(
+            ax=ax, edgecolor="#222222", linewidth=1.2, zorder=2.2
+        )
+        if VOIVODESHIP_SHAPEFILE.exists():
+            voi_gdf = gpd.read_file(VOIVODESHIP_SHAPEFILE).to_crs(CRS_WGS84)
+            voi_gdf.boundary.plot(
+                ax=ax, edgecolor="#444444", linewidth=0.5, zorder=2.1
+            )
+        if DISPLAY_COUNTIES and COUNTIES_SHAPEFILE.exists():
+            counties_gdf = gpd.read_file(COUNTIES_SHAPEFILE).to_crs(CRS_WGS84)
+            counties_gdf.boundary.plot(
+                ax=ax, edgecolor="#777777", linewidth=0.12, alpha=0.5, zorder=2
+            )
+    else:
+        # Regional: region outline (medium) + counties (fine)
+        region_gdf.boundary.plot(
+            ax=ax, edgecolor="#333333", linewidth=1.0, zorder=2.1
+        )
+        if DISPLAY_COUNTIES and COUNTIES_SHAPEFILE.exists():
+            counties_gdf = gpd.read_file(COUNTIES_SHAPEFILE)
+            canonical_name = VOIVODESHIP_NAMES.get(
+                INTERPOLATION_REGION.lower(), INTERPOLATION_REGION.lower()
+            )
+            counties_in_region = counties_gdf[
+                counties_gdf['NAME_1'].str.lower() == canonical_name
+            ]
             if not counties_in_region.empty:
                 counties_in_region = counties_in_region.to_crs(CRS_WGS84)
                 counties_in_region.boundary.plot(
-                    ax=ax,
-                    edgecolor="#888888",
-                    linewidth=0.3,
-                    zorder=2
+                    ax=ax, edgecolor="#888888", linewidth=0.25, zorder=2
                 )
     
     # Box around extent
@@ -161,10 +229,13 @@ def plot_temperature_map(
             stations_to_plot = stations_gdf[stations_gdf['source'].isin(DISPLAY_STATION_SOURCES)].copy()
         else:
             stations_to_plot = stations_gdf.copy()
-        
+
         # Filter out IMGW model points if configured
         if DISPLAY_OBSERVATIONS_ONLY and 'isModel' in stations_to_plot.columns:
             stations_to_plot = stations_to_plot[stations_to_plot['isModel'] != True].copy()
+
+        # Clip to map extent
+        stations_to_plot = stations_to_plot.cx[minx:maxx, miny:maxy].copy()
 
         # Only proceed if we have stations left to plot
         if not stations_to_plot.empty:
@@ -182,11 +253,22 @@ def plot_temperature_map(
         else:
             print(f"⚠ No 'source' column found. Plotting {len(stations_to_plot)} stations (source unverified)")
 
-        # Markers
+        # Markers (size by source accuracy)
+        if 'source' in stations_to_plot.columns:
+            marker_sizes = stations_to_plot['source'].map(
+                _SOURCE_MARKER_SIZES
+            ).fillna(_DEFAULT_MARKER_SIZE).values
+            # IMGW model points get smaller markers (2-3°C error vs gold-standard obs)
+            if 'isModel' in stations_to_plot.columns:
+                is_model = stations_to_plot['isModel'].fillna(False).values
+                marker_sizes = np.where(is_model, 8, marker_sizes)
+        else:
+            marker_sizes = 20
+
         ax.scatter(
-            stations_to_plot.geometry.x, 
+            stations_to_plot.geometry.x,
             stations_to_plot.geometry.y,
-            s=20, marker="s", color="black",
+            s=marker_sizes, marker="s", color="black",
             linewidths=0, zorder=4
         )
         
@@ -226,7 +308,7 @@ def plot_temperature_map(
                               mtransforms.ScaledTranslation(dx_pt/72, 0, fig.dpi_scale_trans))
 
     # Tmax/Tmin annotation
-    if stations_gdf is not None and 'source' in stations_gdf.columns and 'temp' in stations_gdf.columns:
+    if not DISPLAY_CLEAN_MODE and stations_gdf is not None and 'source' in stations_gdf.columns and 'temp' in stations_gdf.columns:
         # Filter for IMGW observational stations
         imgw_mask = stations_gdf['source'] == 'IMGW'
         if 'isModel' in stations_gdf.columns:
@@ -238,7 +320,7 @@ def plot_temperature_map(
             tmax_val = imgw_obs['temp'].max()
             tmin_val = imgw_obs['temp'].min()
             
-            # Finds all stations
+            # Find ALL stations with max/min temperature (handles ties)
             tmax_stations = imgw_obs[imgw_obs['temp'] == tmax_val]
             tmin_stations = imgw_obs[imgw_obs['temp'] == tmin_val]
             
@@ -246,7 +328,7 @@ def plot_temperature_map(
             tmax_names = ', '.join(tmax_stations['station'].str.title().tolist()) if 'station' in tmax_stations.columns else ''
             tmin_names = ', '.join(tmin_stations['station'].str.title().tolist()) if 'station' in tmin_stations.columns else ''
             
-            # Build voivodeship strings
+            # Build voivodeship strings (handle multiple)
             if 'provName' in imgw_obs.columns:
                 tmax_provs = tmax_stations['provName'].dropna().unique()
                 tmin_provs = tmin_stations['provName'].dropna().unique()
@@ -293,19 +375,25 @@ def plot_temperature_map(
         from datetime import timezone
         utc_now = datetime.now(timezone.utc).strftime('%Y-%m-%d  %H:%M  UTC')
     
-    # Title aligned left
-    resolution_km_display = resolution_km / 1000
-    ax.set_title(
-        f'{region_name} • Temperatura powietrza 2 m • {resolution_km_display:g} km\n{utc_now}',
-        loc='left', pad=10, fontsize=12, weight='bold'
-    )
-    
-    # Source footer
-    fig.text(
-        0.02, 0.01,
-        'Źródła pochodzenia danych obserwacyjnych: IMGW (Instytut Meteorologii i Gospodarki Wodnej)  •  TraxElektronik  •  Netatmo  •  Edwin',
-        fontsize=6, color='#444444'
-    )
+    if not DISPLAY_CLEAN_MODE:
+        # Title aligned left
+        if resolution_km >= 1000:
+            res_str = f"{resolution_km / 1000:g} km"
+        else:
+            res_str = f"{resolution_km:g} m"
+        ax.set_title(
+            f'{region_name} • Temperatura powietrza 2 m • {res_str}\n{utc_now}',
+            loc='left', pad=10, fontsize=12, weight='bold'
+        )
+
+        # Source footer
+        ax.text(
+            0.0, -0.01,
+            'Źródła pochodzenia danych obserwacyjnych: IMGW (Instytut Meteorologii i Gospodarki Wodnej)  •  TraxElektronik  •  Netatmo  •  Edwin',
+            transform=ax.transAxes,
+            fontsize=6, color='#444444',
+            ha='left', va='top'
+        )
     
     # Colorbar
     divider = make_axes_locatable(ax)
@@ -313,15 +401,24 @@ def plot_temperature_map(
     
     cb = fig.colorbar(img, cax=cax)
     
-    # Ticks every 5 degrees based on scale range
-    ticks5 = np.arange(
-        np.floor(scale_vmin/5)*5,
-        np.floor(scale_vmax/5)*5 + 1, 
-        5, dtype=int
+    # Adaptive tick interval based on color scale range
+    scale_span = scale_vmax - scale_vmin
+    if scale_span <= 20:
+        tick_step = 1
+    elif scale_span <= 40:
+        tick_step = 2
+    else:
+        tick_step = 5
+    
+    ticks = np.arange(
+        np.ceil(scale_vmin / tick_step) * tick_step,
+        np.floor(scale_vmax / tick_step) * tick_step + 0.5,
+        tick_step, dtype=int
     )
-    ticks5 = ticks5[(ticks5 >= -20) | (ticks5 <= -40)]  # improvement for readability
-    cb.set_ticks(ticks5)
-    cb.set_ticklabels(ticks5)
+    # Below -20°C show only -20 and -40 (skip intermediate ticks)
+    ticks = ticks[(ticks >= -20) | (ticks == -40)]
+    cb.set_ticks(ticks)
+    cb.set_ticklabels(ticks)
     cb.ax.tick_params(labelsize=9)
     cb.set_label('Temperatura 2 m (°C)', rotation=270, labelpad=15, fontsize=9)
     
@@ -330,10 +427,15 @@ def plot_temperature_map(
     ax.set_ylim(miny, maxy)
     ax.set_aspect('auto') # handled aspect in figsize
     ax.axis('off')
-    
+
+    # Adaptive DPI: ensure grid pixels are resolved at high resolutions
+    grid_cols = temperature.shape[1] if temperature.ndim == 2 else 1000
+    data_width_in = FIG_W * 0.82
+    output_dpi = max(DPI, min(int(np.ceil(grid_cols / data_width_in)), 600))
+
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"\n✓ Map saved to: {output_path}")
+    plt.savefig(output_path, dpi=output_dpi, bbox_inches='tight')
+    print(f"\n✓ Map saved to: {output_path} (DPI={output_dpi})")
     
     if show:
         plt.show()

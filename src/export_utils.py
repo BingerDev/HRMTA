@@ -21,16 +21,16 @@ def export_grid_to_geotiff(
     metadata: dict = None
 ):
     """
-    Export grid data to GeoTIFF
+    Export grid data to GeoTIFF.
     
     Args:
-        grid_data: 2D numpy array with data
-        grid_x_1d, grid_y_1d: 1D coordinate arrays
-        output_path: Output file path
-        variable_name: Name of the variable
-        units: Units of the data
-        crs: Coordinate reference system
-        metadata: Additional metadata dictionary
+    - grid_data: 2D numpy array with data.
+    - grid_x_1d, grid_y_1d: 1D coordinate arrays.
+    - output_path: Output file path.
+    - variable_name: Name of the variable.
+    - units: Units of the data.
+    - crs: Coordinate reference system.
+    - metadata: Additional metadata dictionary.
     """
     print(f"\nExporting to GeoTIFF: {output_path.name}")
     
@@ -85,7 +85,7 @@ def export_grid_to_geotiff(
             'VARIABLE_NAME': variable_name,
             'UNITS': units,
             'CREATION_DATE': datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-            'MODEL_VERSION': 'HRMTA v1.0',
+            'MODEL_VERSION': 'HRMTA v1.4.0',
             'RESOLUTION': f'{abs(transform[0]):.1f} meters',
             'MIN_VALUE': f'{np.nanmin(grid_data):.2f}',
             'MAX_VALUE': f'{np.nanmax(grid_data):.2f}',
@@ -118,14 +118,14 @@ def export_temperature_products(
     export_wgs84: bool = True
 ):
     """
-    Export all temperature products (temperature, uncertainty, etc.) to GeoTIFF
+    Export all temperature products (temperature, uncertainty, etc.) to GeoTIFF.
     
     Args:
-        temperature_grid: Temperature data (2D array)
-        uncertainty_grid: Uncertainty data (2D array, optional)
-        grid_x_1d, grid_y_1d: Coordinate arrays
-        metrics: Model performance metrics
-        export_wgs84: Also export in WGS84 for web mapping
+    - temperature_grid: Temperature data (2D array).
+    - uncertainty_grid: Uncertainty data (2D array, optional).
+    - grid_x_1d, grid_y_1d: Coordinate arrays.
+    - metrics: Model performance metrics.
+    - export_wgs84: Also export in WGS84 for web mapping.
     """
     if KEEP_RUN_HISTORY:
         try:
@@ -194,11 +194,11 @@ def export_temperature_products(
 
 def reproject_to_wgs84(input_path: Path, output_path: Path):
     """
-    Reproject GeoTIFF from EPSG:2180 to WGS84
+    Reproject GeoTIFF from EPSG:2180 to WGS84.
     
     Args:
-        input_path: Input GeoTIFF in EPSG:2180
-        output_path: Output GeoTIFF in WGS84
+    - input_path: Input GeoTIFF in EPSG:2180.
+    - output_path: Output GeoTIFF in WGS84.
     """
     from rasterio.warp import calculate_default_transform, reproject, Resampling
     

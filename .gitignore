@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+*.tif
+*.zip
+benchmark_output/
+benchmark_oldscripts/
+inputs/input-PL/_legacy/

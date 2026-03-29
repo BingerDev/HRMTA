@@ -1,14 +1,14 @@
 <div align="center">
   <img src="assets/poster.png" width="100%">
   <br><br>
-  
+
   # HRMTA
-  
+
   **High-Resolution Mesoscale Temperature Analysis**
   <br>
 
   <p align="left">
-    <strong>HRMTA</strong> is an operational, hybrid ML-geostatistics engine designed primarily to interpolate high-resolution (up to 1 km) temperature fields in complicated terrain like river valleys, uplands, spits, and mountain slopes, all in real-time, with the aim of outperforming current traditional methodologies for temperature interpolation like Kriging by achieving a superior physical realism while staying computationally efficient. Currently tuned specifically for Poland, it fuses multi-source station observations with environmental physics to correct for Urban Heat Islands, elevation lapse rates, and local microclimates.
+    <strong>HRMTA</strong> is an operational, physics-aware ML-geostatistics engine designed primarily to interpolate high-resolution (up to 100 m effective resolution) temperature fields across complex terrain like river valleys, mountain slopes, and urban areas, all in real-time, fusing multi-source station observations with a dual Numerical Weather Prediction (NWP) engine and a comprehensive environmental dataset at 100-meter resolution to produce physically realistic continuous air temperature maps while staying computationally efficient enough for operational deployment. It is currently tuned specifically for Poland, and is built on a 4-stage robust stacking architecture with adaptive NWP trust mechanisms and consistently outperforms raw NWP predictions across all tested conditions.
   </p>
 </div>
 
@@ -16,15 +16,17 @@
 
 ## Table of Contents
 1. [Starting the pipeline](#starting-the-pipeline)
-2. [Configuration](#configuration)
-3. [Architecture](#architecture)
-4. [Limitations](#limitations)
-5. [Official blog](#official-blog)
-6. [Roadmap](#roadmap)
-7. [FAQ](#faq)
-8. [License](#license)
-9. [Data](#data)
-10. [Gallery](#gallery)
+2. [Modes](#modes)
+3. [Data tiers](#data-tiers)
+4. [Configuration](#configuration)
+5. [Architecture](#architecture)
+6. [Limitations](#limitations)
+7. [Official blog](#official-blog)
+8. [Roadmap](#roadmap)
+9. [FAQ](#faq)
+10. [License](#license)
+11. [Data](#data)
+12. [Gallery](#gallery)
 
 ## Starting the pipeline
 HRMTA is based on a subset of complex geospatial libraries, therefore it is strongly recommended to use Anaconda ([install it here](https://www.anaconda.com/download)) or Miniconda ([install it here](https://docs.anaconda.com/miniconda/)).
@@ -38,7 +40,7 @@ cd HRMTA
 
 ### 2. Create an environment (Recommended!)
 ```bash
-conda create -n hrmta python=3.9
+conda create -n hrmta python=3.10
 
 conda activate hrmta
 ```
@@ -51,7 +53,23 @@ pip install -r requirements.txt
 > **For Windows users:** If you encounter any errors installing `rasterio` or `fiona` via pip, please try installing them via conda instead:
 > `conda install -c conda-forge geopandas rasterio`
 
-### 4. Netatmo integration [OPTIONAL]
+### 4. Download the input data
+The model requires a pre-built environmental raster dataset to run. Due to the size of this data, it is hosted on Zenodo. Choose one of the three available data tiers depending on your needs and download the corresponding archive:
+
+| Data tier | Size | Description |
+|---|---|---|
+| **Lite** | ~150 MB | DEM only + runtime terrain derivatives |
+| **Standard** | ~900 MB | DEM + terrain physics rasters (TPI, SVF, CAP, HAND) |
+| **Full** | ~1.2 GB | All 16 rasters including environment layers (like building or canopy height) |
+
+**Download:** [HRMTA v1.4.0 raster dataset on Zenodo](https://zenodo.org/records/19266719)
+
+After downloading, you should extract the contents of the archive into the `inputs/input-PL/` folder in the project root directory. The `.tif` raster files must be placed directly inside this folder.
+
+> [!IMPORTANT]
+> At minimum, the model requires the Digital Elevation Model (DEM) raster to run. If the DEM is not found in `inputs/input-PL/`, the pipeline will stop with an error pointing you to this section. All other rasters are optional and the model will continue to run with reduced accuracy (!) if they are not present, also printing you a warning about which rasters are missing along with your current data tier setting information.
+
+### 5. Netatmo integration [OPTIONAL]
 If you want to add even more weather stations on the map, you can use an optional PWS station data provider (Netatmo) built into the model. To access it, you need to obtain an API key from their official page:
 
 1. Proceed to [Netatmo Weather API](https://dev.netatmo.com/apidocumentation/weather).
@@ -70,130 +88,183 @@ If you want to add even more weather stations on the map, you can use an optiona
 > [!NOTE]
 > Please take into account that this step is optional and the model pipeline will normally operate even without Netatmo data being available. The model will default to IMGW, Traxelektronik, and Edwin observational data, which is configured automatically and you don't have to obtain any additional API keys for it. Consider whether you would like to have a few hundred additional weather station data or if that is too time-consuming for you and you would like to proceed automatically using default observational data sources.
 
-### 5. Run the pipeline
+### 6. Run the pipeline
 Generate your first temperature map by running the next command in your terminal:
 ```bash
 python run.py
 ```
 Now, you should see your first temperature map that has appeared as `temperature_map.png` in the `output/` folder alongside other model performance maps.
 > [!NOTE]
-> At first launch, the model is going to run for a bit longer compared to average runtime speed, as the model will have to set up everything for the first time on this device. However, later on, the model should be running at normal runtime speeds.
+> At first launch, the model is going to run for a bit longer compared to average runtime speed, as the model will have to set up everything for the first time on this device. Also, if you are using Pro mode, the first run will need to download current NWP data from HARMONIE and ICON-EU, which may take some additional time depending on your internet connection. However, later on, the model should be running at normal speeds with the NWP cache already in place.
+
+## Modes
+With the introduction of the dual NWP engine in v1.4.0, the model now supports two configuration modes that determine whether NWP data is being used in the pipeline. The mode is controlled by the `MODE` setting in `src/config.py`.
+
+- **Standard** - Pure observation-based interpolation that still benefits from all the core architecture refinements of v1.4.0, including the ensemble LightGBM, PERK, refined QC system, and the completely redesigned environmental dataset, but operates without NWP data, relying purely on station observations and terrain features, similarly to previously available versions. This mode is useful particularly for lightweight execution, comparison purposes, or for cases where NWP data for some reason might be temporarily unavailable.
+
+- **Pro** *(recommended)* - Includes everything from Standard plus full dual NWP integration from HARMONIE-AROME DMI (~2.5 km) and ICON-EU (~6.5 km) models, with the Atmospheric Prior trust mechanism, NWP-derived interaction features, and the Quality Gate feature. The NWP data is automatically downloaded and processed by the pipeline without any additional API keys nor dependencies required. This mode provides the absolute highest performance, with a validated ~17% RMSE improvement over v1.3.1 and consistent outperformance of raw NWP predictions in all conditions. The trade-off is a slightly longer runtime and additional disk space for NWP cache, but it is generally recommended to always use Pro mode for the best results.
+
+> [!NOTE]
+> The mode setting is independent from the data tier setting. You can combine any mode with any data tier depending on your needs. For example, `MODE="pro"` with `DATA_TIER="lite"` gives you NWP-driven accuracy with the smallest environmental dataset footprint.
+
+## Data tiers
+Due to the significant expansion of the environmental raster dataset in v1.4.0, where the full dataset grew from ~50 MB in v1.3.1 to ~1.2 GB, which is about 24× larger, it was necessary to implement a new data tier system that controls how much of the environmental dataset the model loads. The data tier is controlled by the `DATA_TIER` variable in `src/config.py` and is independent from the mode setting.
+
+- **Lite** (~150 MB) - Includes just the high-resolution DEM along with runtime derivatives like slope, aspect, Topographic Position Index (TPI), roughness, and curvature. The model relies primarily on coordinates and NWP features (in Pro mode) for its predictions. Grid resolution is capped to 1 km at this tier.
+
+- **Standard** (~900 MB) - Lite + terrain physics rasters derived from DEM: TPI at 500 m and 2 km scales, Sky View Factor (SVF), Cold Air Pooling (CAP) anomaly, and HAND (Height Above the Nearest Drainage). This tier provides physics-grade cold pool and microclimate modeling without the environment layers.
+
+- **Full** (~1.2 GB) - Standard + all remaining environment rasters, including population data (LandScan), land cover classification, settlement fraction, imperviousness, forest fraction, land surface temperature composite, water fraction, canopy height, building height, and cropland fraction. It is the maximum feature set with the best accuracy.
+
+> [!NOTE]
+> The model will gracefully handle missing rasters at any tier level. If rasters are missing, the pipeline will print a warning with the list of missing rasters and will continue to run with a reduced feature set. However, the DEM is always required and the model will not start without it.
 
 ## Configuration
-All configuration variables are being stored in the model's main configuration file located in `src/config.py`. The project has been optimized specifically to make most of its core features easily customizable for the user from the configuration file. Currently, the default values are optimized for the best model performance. However, it may still not be perfect. Here's an explanation for the main variables defined in the config:
-- `COLOR_SCALE` - Path for the color scale CSV file. You can edit the color scale in any way and change it to any color scale that you would like by grabbing your color scale and editing it to a value/HEX code format inspired by the current format of the data present in the file. The default path for the color scale file is `inputs/input-PL/color_scale.csv`. All the values are provided in °C.
-- `IMGW_DATA_MODE` - all/observations/model. This allows you to control what IMGW data you want to be fetched into the model. The provider of the data provides model and observation data for IMGW weather stations. By default, it is set to all, so that the model is using most of the data, although some of the data might be lower quality compared to actual measurements, therefore you might want to switch the mode to `observations`.
-- `PERFORM_SPATIAL_QC` - True/False. This variable is responsible for the Spatial Outlier detection system that corrects station measurement errors using its neighbors.
-- `QC_NEIGHBORS` - Number of neighbor stations that the spatial outlier system should look for.
-- `QC_Z_THRESHOLD` - Standard deviation threshold in °C used for station flagging.
-- `QC_ABS_THRESHOLD` - Absolute difference threshold in °C for automatically flagging stations with a large margin of error.
-- `QC_LAPSE_RATE` - Standard lapse rate in °C/m that is being used for elevation adjustment later on.
-- `GRID_RESOLUTION` - Crucial variable that most of the users will likely wish to change the most frequently from time to time. This parameter is responsible for the entire resolution of the temperature map in meters. For example, `5000` stands for `5 km`. The higher the resolution is, the slower the model will run.
-- `APPLY_SMOOTHING` - True/False. Allows you to apply smoothing to the temperature map.
-- `SMOOTHING_SIGMA` - If `APPLY_SMOOTHING` is set to True, this parameter allows you to control the intensity of smoothing that is being applied. The higher the value is, the more smoothed the temperature map will get.
-- `DISPLAY_STATION_SOURCES` - You can use this parameter to choose which observational data sources you want to be displayed on the map. Due to potential conflicts between more accurate and less accurate temperature readings, the default setting is set to IMGW stations display and it is the recommended setting. However, if you would want to display all the station data that the model is being trained on, then you can add Traxelektronik (`TRAX`), Edwin (`EDWIN`), and/or Netatmo (`NETATMO`) to the list by adding a comma and following the existing format.
-- `KEEP_RUN_HISTORY` - True/False. When set to True, it saves the model output data to a dedicated, timestamped folder each time you run the model. When set to False, the data is being simply put to the `output/` folder and the files are being overwritten each time you run the model, which helps to reduce the disk space usage when the model is run frequently, but it is recommended to keep it at True if you run the model rarely and care about preserving the history of the previous runs.
-- `INTERPOLATION_REGION` - This parameter is responsible for the region of interpolation. By default, it is set to the entire Poland, but if you want to run the model only for a certain region/voivodeship, you can set the value of this parameter to the name of the voivodeship, like `Mazowieckie` or `Małopolskie`. It also supports English names. Regional scale also helps to significantly reduce the runtime.
-- `DISPLAY_COUNTIES` - True/False. It displays counties on the map when `INTERPOLATION_REGION` is set to a certain region. If you don't want them to be visible, set the value of this parameter to False.
-- `REGIONAL_BUFFER_KM` - Controls the buffer distance (in km) from the selected region borders when in a regional mode, which helps to enhance the model awareness of the current situation outside the region by using additional station data within the defined distance extent to train the model.
-- `MIN_REGIONAL_STATIONS` - This parameter accepts a number value and controls the minimum number of stations that should be located within the region extent. If fewer stations are available, the model will print a warning that the result predictions may be unreliable, and the overall interpolation quality will worsen.
+All configuration variables are stored in the model's main configuration file located in `src/config.py`. The project has been optimized to make most of its core features easily customizable from the configuration file. Here's an explanation for the main variables:
 
-We strongly don't recommend editing any other variables in the configuration file, especially ones related to Spatial CV and the model architecture itself, unless you are an expert and know what you are doing. Edit the configuration file with responsibility.
+**Core settings:**
+- `MODE` - `"standard"` or `"pro"`. Controls whether the model uses NWP data in the pipeline. See the [Modes](#modes) section for details.
+- `DATA_TIER` - `"lite"`, `"standard"`, or `"full"`. Controls which environmental raster layers are loaded. See the [Data tiers](#data-tiers) section for details.
+- `GRID_RESOLUTION` - Resolution of the temperature map in meters. For example, `1000` stands for 1 km. The higher the resolution is, the slower the model will run but the more spatial detail will be present on the map.
+- `INTERPOLATION_REGION` - Region of interpolation. By default set to the entire Poland, but you can set it to a specific voivodeship name like `"Mazowieckie"` or `"Małopolskie"`. It also supports English names. Regional scale helps to significantly reduce the runtime.
+
+**Visualization:**
+- `COLOR_SCALE` - Path for the color scale CSV file. You can edit the color scale in any way and change it to any color scale that you would like by following the existing value/HEX code format. The default path is `inputs/input-PL/color_scale.csv`. All the values are provided in °C.
+- `DISPLAY_CONTOURS` - `True`/`False`. When enabled, isotherm contour lines are overlaid on the temperature map for easier visual interpretation of the temperature field.
+- `CONTOUR_INTERVAL` - Spacing between isotherm contour lines in °C.
+- `DISPLAY_COUNTIES` - `True`/`False`. Displays county boundaries on the map. Works in both national and regional modes.
+- `DISPLAY_CLEAN_MODE` - `True`/`False`. When enabled, only the map, its overlays, and the color scale are displayed, without title, source footer, and Tmax/Tmin callouts. Useful for dashboard embedding, website integration, or social media.
+- `DISPLAY_STATION_SOURCES` - `"IMGW"`/`"TRAX"`/`"EDWIN"`/`"NETATMO"`. Controls which observational data sources are displayed as station points on the map.
+
+
+**Data and processing:**
+- `IMGW_DATA_MODE` - `"all"`/`"observations"`/`"model"`. Controls what IMGW data is fetched into the model. By default set to `"all"`, so that the model is using most of the data, although some of the model data might be lower quality compared to actual observations.
+- `APPLY_SMOOTHING` - `True`/`False`. Allows you to apply smoothing to the temperature map.
+- `SMOOTHING_SIGMA` - Controls the intensity of smoothing being applied. The higher the value, the more smoothed the map will get.
+- `KEEP_RUN_HISTORY` - `True`/`False`. When `True`, saves output data to a dedicated, timestamped folder each time you run the model. When `False`, files are being overwritten in `output/`, which helps to reduce disk space when running frequently.
+- `REGIONAL_BUFFER_KM` - Buffer distance in km from the selected region borders in regional mode. Helps to enhance the model awareness of conditions outside the region by using additional station data around it.
+- `PERFORM_SPATIAL_QC` - `True`/`False`. Enables the Spatial Quality Control system (FS-ISCT) that validates each station observation against its neighbors after adjusting for expected differences due to terrain.
+
+We strongly don't recommend editing any other variables in the configuration file, especially ones related to Spatial CV, QC hyperparameters, and the model architecture itself, unless you are an expert and know what you are doing. Edit the configuration file with responsibility.
 
 ## Architecture
-The model architecture is built on three different layers of interpolation, each of which fixes the errors and limitations of the previous one. Each layer has been carefully picked and developed for the most optimal model performance after a long time of evaluation and experimenting with different architectures.
+The model architecture of v1.4.0 is built on four stages of interpolation, where each stage is designed specifically to handle something that the previous one can't. Each stage has been carefully developed and evaluated after a long history of experimentation with different architectures across all previous iterations of the project, optimizing for the best balance between accuracy and computational efficiency.
 
-After the model is provided with large subsets of environmental and observational datasets, it runs a Huber Regression, which acts as a physics baseline for the model. In short, it calculates the base relationship between temperature and lapse rate in the model.
+**Stage 1: Huber Regression (Physics baseline)**
 
-Then, the model runs a LightGBM, which is the primary Machine Learning (ML) layer in the model. It predicts the errors of the previously run Huber Regression model based on provided subsets of environmental data. It is capturing non-linear relationships that a simple math model wouldn't be able to calculate and it is crucial for interpolation of smaller temperature relationships in the model, such as river influence, elevation factor, or Urban Heat Island. LightGBM has been chosen over other ML models like XGBoost or RF primarily due to how computationally efficient it is, which was crucial for the goal of developing the most efficient model in terms of accuracy correlation with compute.
+The first stage of the pipeline is responsible for constructing the physics baseline of the entire system. It captures the large-scale relationship between elevation and temperature (the lapse rate), plus geographic gradients like latitude and distance from the coast. It acts as the physics anchor of the model, and it is critical that this component remains simple and robust, because every other stage builds on top of it. If this stage overfits or fails, everything downstream collapses. However, a stable physics baseline alone still leaves the model with the same fundamental blindness that limited all previous versions, as it doesn't know what's happening in the atmosphere right now.
 
-Finally, a simple kriging layer is run, which is also crucial for the model performance. It interpolates the remaining errors that none of the previous layers were able to explain. Basically, it is a fine-tuning layer to ensure spatial continuity and stable performance of the model.
+**Stage 1.5: Atmospheric Prior (Pro mode only!)**
+
+This component is entirely new in v1.4.0 and was absent from all previous versions of the project. Before the ML model sees the data, there is now a blending step that creates a trust-weighted blend of the Huber prediction and the NWP prediction at each location. If the NWP is performing well, the blend leans toward NWP data. If NWP is performing poorly (which the pipeline learns by comparing NWP predictions against nearby station observations), it falls back toward pure Huber. This gives the core ML model a significantly better starting point, because instead of learning the entire temperature pattern from terrain features alone, it receives residuals from a prediction that already contains atmospheric physics. In areas where NWP is accurate, the residuals are small and LightGBM barely needs to correct anything. Where NWP struggles, the residuals are larger and the ML model has more work to do. This safety mechanism was specifically designed to prevent the model from following NWP failure modes, so that it always stays ahead of raw NWP.
+
+**Stage 2: LightGBM Ensemble (core ML engine)**
+
+The core ML engine of the model. Previously, a single LightGBM model was used, and now it's 5 independent models with completely different random seeds, where each sees a slightly different subsample of the training data. By averaging them, the random errors wash out and the true signal gets reinforced, which effectively reduces variance without increasing bias. The disagreement between the five models also provides a reasonable uncertainty estimate. The LightGBM parameters have been carefully re-tuned for v1.4.0 to be more conservative by design, because the model now has many more features to learn from and needs reliable protection against overfitting.
+
+**Stage 3: PERK: Post-Ensemble Residual Kriging (Spatial correction)**
+
+The final Kriging mechanism has been fundamentally changed compared to previous iterations, where each model had its own Kriging pass. In v1.4.0, Kriging is applied only once on the consensus residuals after all 5 ensemble members complete their predictions. With the ensemble mean, model-specific noise is averaged out, so Kriging sees a cleaner signal and produces better corrections. This also speeds up the computation by approximately 80% (one Kriging pass instead of five), while simultaneously producing smoother spatial corrections.
 
 <img src="assets/architecture.png" width="100%">
 
 ## Limitations
-While the model has been made to overcome frequent challenges with traditional interpolation models and optimize for the best accuracy and computational efficiency, it still has numerous important limitations that are important to acknowledge while using the model:
-- The model is not some magic genie, therefore you're not going to receive perfect temperature values from the model. It acts like a physically plausible temperature estimator, and every such tool has its own margin of error.
-- Due to the architecture of the model, Kriging is still likely to outperform HRMTA in point-to-point accuracy, primarily during stable temperature conditions. This is because HRMTA architecture prioritizes physical realism over mathematical perfectionism. HRMTA is designed to specifically create a physically accurate temperature field. While simple interpolation models like Kriging or IDW are simply connecting the station readings to extract the most likely temperature value for a given point, HRMTA integrates actual physics into the model and forces it to interpolate a temperature field that makes physical sense.
-- There are highest grid resolution constraints for this specific version of the model. Because the model is being trained on the extent of the entire Poland, the input environmental data is really coarse and has a limited resolution. If you try to interpolate at a grid resolution higher than the absolute highest effective resolution (which is around 1 km), not only the model runtime will skyrocket and get unsuitable for operational usage, but also the model is not going to produce any new data and unexpected behavior is almost guaranteed, resulting in severe model performance degradation.
-- The model pipeline is overly dependent on the exact structure of observational data. If anything changes, the model data extraction from this specific data source will fail. However, this is already being handled in the model - if one data source fails to fetch, the model will still run with other available data sources.
-- Some of the data sources provide only names of the places at which stations are located but does not provide precise coordinates. This introduces a layer of uncertainty into the model, which is currently one of the main sources of error in the model.
+While the model has been designed to overcome challenges with traditional interpolation approaches and optimize for the best accuracy and also the computational efficiency of the model, it still has important limitations that should be acknowledged:
+- The model is not a magic solution, therefore you are not going to receive perfect temperature values from it. It acts like a physically plausible temperature estimator, and every such tool has its own margin of error.
+- NWP data availability is not guaranteed. Model runs from HARMONIE-AROME or ICON-EU can sometimes be temporarily unavailable. The pipeline handles this through its fallback logic, but it is a dependency that can affect Pro mode performance when it happens.
+- NWP resolution is still coarser than the output grid. Even HARMONIE at ~2.5 km can't resolve sub-kilometer terrain effects directly, which is exactly why the terrain dataset and ML correction layers exist on top of it.
+- Because NWP model runs update only every few hours, between these updates the atmospheric data can become increasingly stale, which especially matters during rapidly evolving weather like fast moving cold fronts.
+- At the native raster resolution scale (~100 m), the temperature field is derived almost entirely from the environmental terrain predictors. These finest patterns represent the model's best estimate of how terrain modulates temperature, they are physically informed but not independently verified at that scale.
+- The model pipeline is dependent on the exact structure of observational data sources. If anything changes with external data providers, that specific source will fail. However, if one source fails to fetch, the model will still run with the remaining available data.
+- Some of the observational data sources provide only place names of the stations without precise coordinates. This introduces a layer of spatial uncertainty through automated geocoding, which is still one of the sources of error in the model.
 - The model is diagnostic and intended primarily for interpolation of the current temperature field. It is not a weather forecasting tool.
-- Some of the pipeline and the entire model's environmental and observational datasets have been optimized specifically and strictly for the extent of Poland. Changing the country of interpolation is currently pretty challenging and is manual. It requires deep knowledge of the topic and is time-consuming.
-- Because of the model aggregating data from different sources with varying refresh rates, there could be some issues during rapidly moving cold fronts or other rapidly progressing phenomena. It is likely that the model interpolation may sometimes slightly lag compared to the actual observations in such conditions.
-- The current Spatial Quality Control system that aims to reduce the impact of low-quality observational data on model's performance is still not perfect. For example, right now, this system might also drop reliable stations due to the large deviation of temperature and it treats actual temperature as noise. Further development of the quality control system is planned in the future.
-- The model performance is not fully guaranteed at this stage of development. Occasional errors and performance degradations are not excluded.
+- The pipeline and the environmental datasets have been optimized specifically and strictly for the extent of Poland. Changing the country of interpolation is manual, requires deep knowledge of the topic, and is not recommended without significant expertise.
+- The Spatial Quality Control system, while significantly improved in v1.4.0 with continuous confidence weights and feature-space consistency testing, is still not perfect. There are edge cases where reliable stations may receive lower confidence weights or where faulty stations could pass through.
+- At the current stage of the model's development, its performance is not guaranteed and occasional errors may occur.
 
 ## Official blog
-For further details about the previous iterations of the project that were never released publicly and for learning about the entire project development history with some additional visualizations and useful information, please refer to the [official blog](https://medium.com/@gorlicjakub/update-on-high-resolution-mesoscale-temperature-analysis-hrmta-9713e73761a4). I highly encourage you to read this blog as it contains much more information compared to this description along with a lot of interesting sections that weren't included in this GitHub project documentation.
+For very detailed information about the architecture of the model, benchmark results, practical examples, and the entire project development history along with its philosophy, please visit the official project blogs:
+- **["The new epoch in Poland's frontier open-source weather interpolation technology"](https://medium.com/@gorlicjakub/the-new-epoch-in-polands-frontier-open-source-weather-interpolation-technology-330d30482141)**: Very insightful article about the fundamental architecture reimagination of v1.4.0, including NWP integration, terrain dataset upgrade, detailed benchmark analysis with 10-run SLOOCV validation, practical examples, and more.
+- **["Update on High-Resolution Mesoscale Temperature Analysis"](https://medium.com/@gorlicjakub/update-on-high-resolution-mesoscale-temperature-analysis-hrmta-9713e73761a4)**: The original project blog covering the entire development history from September 2024 through its first public release in December 2025.
+
+I highly encourage you to read especially the v1.4.0 blog as it contains significantly more detailed information about all of the changes and the reasoning behind them, along with detailed benchmark analysis and visualizations that weren't included in this documentation.
 
 ## Roadmap
-The model's trajectory in the future will be leaning towards experimental solutions aiming to further reduce the margin of error. Currently, the most high-priority plans include introduction of a higher amount of both environmental and observational data, development of more robust guards against unreliable data sensors, and refinement of the physics engine to allow for multi-parameter interpolation beyond just temperature. It is also worth mentioning that between larger updates, the model will continuously improve based on gathered user feedback.
+The project's trajectory in the near future is primarily leaning towards two main directions. The first and most important direction is the transition from a temperature-only interpolation approach to a multi-parameter interpolation engine, which is expected to happen progressively over the next few months. The second direction is the continuous refinement of the environmental raster dataset, including exploration of new sources like Sentinel-3 SLSTR for land surface temperature, topology-aware drainage modeling, and integration of new satellite observations such as MTG-S1, Europe's first geostationary satellite sounder. Along with these major directions, the model will be continuously improved based on received user feedback. Furthermore, as the severe weather season of 2026 approaches in Europe, more attention is expected to be given to the storm chasing community, both to investigate model performance in convective environments and to explore how the model may benefit chasers during dangerous weather events. Long-term plans for international expansion of the model extent remain largely unchanged, and an update on that is expected to follow by the end of the year.
 
 ## FAQ
 **How do I run the model?**
 
 The model is easy to run and setup. For detailed step-by-step instructions, please follow [this guide](#starting-the-pipeline).
 
+**What are the differences between Standard and Pro mode?**
+
+Standard mode uses station observations and terrain features only, without NWP data, while still benefiting from all the core architecture improvements of v1.4.0. Pro mode adds full dual NWP integration from HARMONIE-AROME and ICON-EU on top, which provides significantly better accuracy and physical realism, especially in sparse areas and during complex weather conditions like temperature inversions. It is generally recommended to always use Pro mode. See [Modes](#modes) for more details.
+
+**Which data tier should I use?**
+
+It depends on your needs and available disk space. For quick testing or a lightweight setup, Lite (~150 MB) is sufficient and will provide a reasonable result, especially in Pro mode where NWP data compensates for the smaller terrain dataset. For the best accuracy with the full environmental dataset, use Full (~1.2 GB). Standard is a good middle ground focused on terrain physics with cold pool and microclimate modeling. See [Data tiers](#data-tiers) for a detailed comparison.
+
 **How to change the resolution of the temperature map?**
 
-You would have to change the value of `GRID_RESOLUTION` variable in the `src/config.py` file, which is currently being provided in meters.
+You would have to change the value of `GRID_RESOLUTION` variable in the `src/config.py` file, which is provided in meters. Keep in mind that the effective resolution depends on your data tier: Full supports up to 100 m, Standard up to 250 m, and Lite up to 1 km. Setting a resolution finer than what your tier supports will trigger a warning.
 
-**Why is HRMTA superior compared to the traditional interpolation methodologies?**
+**Why is HRMTA better compared to traditional interpolation methodologies?**
 
-The main advantage of HRMTA is that it excels at physical realism and robustness. Other interpolation methodologies like Kriging are designed to handle temperatures in a smoothed and simplified way. They will simply smooth the gradient between two points, while HRMTA is able to actually explain the data even in conditions with lack of data. If it will be cold on a certain mountain summit, the model will know that even if there is no weather station on there. What's more, traditional approaches can't simulate impact of microclimates on the temperature, such as those generated by cities. HRMTA can do it, as it is specifically trained on relevant environmental dataset to accomplish the task. Also important to mention that other systems are known for their inability to handle low-quality sensor data and are prone to the interpolation of extremes on the map, while HRMTA effectively handles that by its robust physics baseline and existing & planned methodologies to minimize the impact of low-quality sensor data on the model performance. Summarizing it, traditional systems are way too simplified and assume linear, simple spatial relationships, while HRMTA is designed to handle complex and non-linear interactions.
+The main advantage of HRMTA is that it excels at physical realism and robustness. Traditional interpolation approaches like Kriging or IDW will simply smooth the gradient between observation points, while HRMTA is able to actually explain the data even in areas with very limited station coverage. Thanks to its NWP integration in Pro mode, the model understands much more about the current state of the atmosphere, which is critical for complex weather conditions like temperature inversions, radiative cooling patterns, or frontal passages. What's more, HRMTA handles low-quality sensor data through its robust Quality Control system with continuous confidence weighting, while traditional approaches are known for their sensitivity to measurement errors and inability to distinguish between reliable and unreliable observations. Summarizing it, traditional systems assume simple, linear spatial relationships, while HRMTA is designed to handle complex, non-linear interactions through physics-aware machine learning.
 
-**Is it possible to interpolate temperature data beyond Poland using this model?**
+**Is it possible to interpolate temperature data beyond Poland?**
 
-No, at least not yet. There are plans to automatically include more pre-built datasets for more European countries, but these are more long-term plans. Currently. we are focusing on Poland to explore different technologies before moving to a wider coverage.
+No, at least not yet. There are long-term plans to expand the model extent to more European countries, but currently the focus remains on Poland. An update on this will follow by the end of the year.
 
-**Can I run the model only for specific region of Poland?**
+**Can I run the model only for a specific region of Poland?**
 
-Yes, in order to do that you need to simply update the value of the `INTERPOLATION_REGION` parameter in the `src/config.py` configuration file with a region name (either in English or in Polish) that you want to be used for the interpolation.
+Yes, in order to do that you need to simply update the value of `INTERPOLATION_REGION` in `src/config.py` with a voivodeship name, either in Polish or in English, like `"Mazowieckie"`. Regional scale also helps to significantly reduce the runtime.
 
 **Is there a way to switch between smoothed and gridded output?**
 
-Yes, of course. The smoothing of the temperature map is being determined by the `APPLY_SMOOTHING` variable in the `src/config.py` configuration file. If set to `True`, the map gets smoothed. If set to `False`, the model produces raw, gridded data according to the chosen resolution.
+Yes, of course. The smoothing of the temperature map is being determined by the `APPLY_SMOOTHING` variable in `src/config.py`. If set to `True`, the map gets smoothed. If set to `False`, the model produces raw, gridded data according to the chosen resolution.
 
 **What are the current limitations of HRMTA?**
-
 There is a significant portion of the text describing current main limitations of the model that you should always be aware of. Please refer to the [Limitations](#limitations) section.
 
 **How long does it take to run the model?**
 
-It depends on the selected resolution and the extent of interpolation in the configuration file. By default, the resolution is set to 5 km, and it usually takes approximately 5-10 minutes to fully run the model after first initialization run on a national scale, and a bit faster on a regional scale.
+It depends on the selected resolution, mode, and the interpolation extent. By default (Pro mode, 1 km, national scale), the model usually takes approximately 10–15 minutes to fully run after the first initialization. Standard mode is slightly faster as it doesn't require NWP data download. Regional scale also significantly reduces the runtime. The first run will take somewhat longer as the model sets up caches and downloads NWP data for the first time.
 
-**How does the model handle larger margin of error of observational data with PWS/RWS stations?**
+**How does the model handle unreliable observational data?**
 
-The model runs a dedicated technology for that, the Spatial Quality Control. Basically, it compares a station reading with its neighbors while adjusting for elevation differences. If the sensor gets detected as statistically too far from the neighbor observations, it automatically gets flagged and removed from the model training. However, this approach is still not perfect and it has its own limitations, therefore more and better solutions for this challenge will be developed in future versions of the project.
+The model runs a dedicated technology for that, the FS-ISCT (Feature-Space Iterative Spatial Consistency Test). Instead of simple binary outlier flagging, it assigns continuous confidence weights to each station by comparing observations against their neighbors in both geographic and feature space, while adjusting for expected temperature differences due to terrain. Stations with readings that are inconsistent with their surroundings receive lower weights rather than being completely removed, which preserves information while reducing the impact of measurement errors. However, this approach still has its own limitations.
 
-**What are the system requirements needed to properly run the model?**
+**What if one of the data sources goes down?**
 
-At the current stage, the model is designed to be lightweight, therefore the model is optimized for any kind of modern hardware with a standard CPU.
+The model effectively handles that by skipping the unavailable source and continuing the pipeline with remaining data. Similarly, if NWP data is unavailable in Pro mode, the pipeline falls back gracefully to terrain-only predictions.
 
-**What if one of the model observational data provider sources goes down?**
+**Can I use this model to forecast temperature?**
 
-The model will effectively handle that by skipping that exact source of data and continuing to run the pipeline with the available data.
+No, absolutely not. HRMTA is only a diagnostic tool intended for real-time interpolation of the current temperature field. It is not a weather forecasting system.
 
-**Can I use this model to forecast temperature in my hometown tomorrow?**
+**What are the system requirements?**
 
-No, absolutely not. HRMTA is only a diagnostic tool that is intended for real-time interpolation of data at the current timestamp.
+The model is designed to be lightweight and optimized for any kind of modern hardware with a standard CPU. Disk space requirements depend heavily on your chosen data tier (~150 MB to ~1.2 GB for input data, and some space for NWP cache in Pro mode which is automatically managed by the pipeline).
 
 ## License
 Source code of HRMTA is being licensed under the **MIT License**. Please see the [LICENSE](LICENSE) file for details.
 
 ## Data
-The environmental dataset (`input-PL`) contains pre-processed snippets from third-party sources. These files are distributed under their respective open licenses.
+The environmental raster dataset required by the model is hosted on [Zenodo](https://zenodo.org/records/19266719) primarily due to file size constraints. Three self-contained data tiers are available for download - see [Starting the pipeline](#starting-the-pipeline) and [Data tiers](#data-tiers) for details.
+
+The dataset contains pre-processed rasters from third-party sources distributed under their respective open licenses.
 *   **Check [DATA_LICENSE.txt](inputs/input-PL/DATA_LICENSE.txt)** for full legal attribution and usage terms regarding the input environmental dataset.
 *   Usage of observational data from IMGW, Traxelektronik, Netatmo, and Edwin is subject to the terms of service of those respective providers.
 
 ## Gallery
-<img src="assets/gallery_1.png" width="100%">
+<img src="assets/gallery_1.jpg" width="100%">
 
 <img src="assets/gallery_2.png" width="100%">
 
-<img src="assets/gallery_3.png" width="100%">
+<img src="assets/gallery_3.jpg" width="100%">
 
-<img src="assets/gallery_4.png" width="100%">
+<img src="assets/gallery_4.jpg" width="100%">
 
-<img src="assets/gallery_5.png" width="100%">
+<img src="assets/gallery_5.jpg" width="100%">
